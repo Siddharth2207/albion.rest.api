@@ -150,6 +150,7 @@ in {
   services.logrotate = {
     enable = true;
     settings."/mnt/data/st0x-rest-api/logs/*.log" = {
+      su = "root st0x";
       rotate = 14;
       weekly = true;
       compress = true;
