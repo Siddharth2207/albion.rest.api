@@ -25,7 +25,7 @@ let
 
     inherit cargoVendorDir;
 
-    nativeBuildInputs = [ sqlx-cli pkgs.pkg-config ];
+    nativeBuildInputs = [ sqlx-cli pkgs.pkg-config pkgs.curl ];
 
     buildInputs = [ pkgs.openssl pkgs.sqlite ]
       ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin
