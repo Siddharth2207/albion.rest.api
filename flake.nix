@@ -56,6 +56,13 @@
             inherit (pkgs) sqlx-cli;
           };
         in rainixPkgs // deployPkgs // {
+          rs-test = rainix.mkTask.${system} {
+            name = "rs-test";
+            body = ''
+              set -euxo pipefail
+              cargo test --workspace
+            '';
+          };
           inherit (infraPkgs) tfInit tfPlan tfApply tfDestroy tfEditVars;
 
           st0x-rest-api = st0xRust.package;
@@ -152,6 +159,7 @@
               sqlx-cli
               terraform
               ragenix.packages.${system}.default
+              packages.rs-test
               packages.prepSolArtifacts
               packages.remote
               packages.deployNixos
