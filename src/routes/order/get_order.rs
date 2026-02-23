@@ -87,6 +87,7 @@ fn build_order_detail(
     io_ratio: &str,
     trades: &[RaindexTrade],
 ) -> Result<OrderDetail, ApiError> {
+    // The current application only supports single-pair orders (one input vault, one output vault).
     let inputs = order.inputs_list().items();
     let outputs = order.outputs_list().items();
 
