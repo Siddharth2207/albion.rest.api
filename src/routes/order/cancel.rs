@@ -29,7 +29,7 @@ use tracing::Instrument;
 pub async fn post_order_cancel(
     _global: GlobalRateLimit,
     _key: AuthenticatedKey,
-    raindex: &State<crate::raindex::RaindexProvider>,
+    shared_raindex: &State<crate::raindex::SharedRaindexProvider>,
     span: TracingSpan,
     request: Json<CancelOrderRequest>,
 ) -> Result<Json<CancelOrderResponse>, ApiError> {
@@ -37,6 +37,7 @@ pub async fn post_order_cancel(
     async move {
         tracing::info!(body = ?req, "request received");
         let hash: B256 = req.order_hash;
+        let raindex = shared_raindex.read().await;
         let response = raindex
             .run_with_client(move |client| async move {
                 let ds = RaindexOrderDataSource { client: &client };
@@ -119,8 +120,8 @@ mod tests {
     async fn test_cancel_order_success() {
         let ds = MockOrderDataSource {
             orders: Ok(vec![mock_order()]),
-            trades: vec![],
-            quotes: vec![],
+            trades: Ok(vec![]),
+            quotes: Ok(vec![]),
             calldata: Ok(mock_calldata()),
         };
         let result = process_cancel_order(&ds, test_hash()).await.unwrap();
@@ -165,8 +166,8 @@ mod tests {
     async fn test_cancel_order_not_found() {
         let ds = MockOrderDataSource {
             orders: Ok(vec![]),
-            trades: vec![],
-            quotes: vec![],
+            trades: Ok(vec![]),
+            quotes: Ok(vec![]),
             calldata: Ok(mock_calldata()),
         };
         let result = process_cancel_order(&ds, test_hash()).await;
@@ -177,8 +178,8 @@ mod tests {
     async fn test_cancel_order_calldata_error() {
         let ds = MockOrderDataSource {
             orders: Ok(vec![mock_order()]),
-            trades: vec![],
-            quotes: vec![],
+            trades: Ok(vec![]),
+            quotes: Ok(vec![]),
             calldata: Err(ApiError::Internal("failed".into())),
         };
         let result = process_cancel_order(&ds, test_hash()).await;
