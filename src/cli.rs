@@ -22,6 +22,8 @@ pub enum Command {
     },
     #[command(about = "Manage API keys")]
     Keys {
+        #[arg(long)]
+        config: PathBuf,
         #[command(subcommand)]
         command: KeysCommand,
     },
@@ -215,6 +217,24 @@ mod tests {
     fn test_cli_requires_subcommand() {
         let cli = Cli::try_parse_from(["app"]).expect("parse");
         assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_keys_requires_config_flag() {
+        let result = Cli::try_parse_from(["app", "keys", "list"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_keys_parses_config_flag() {
+        let cli = Cli::try_parse_from(["app", "keys", "--config", "/path/to/config.toml", "list"])
+            .expect("parse");
+        match cli.command {
+            Some(Command::Keys { config, .. }) => {
+                assert_eq!(config, PathBuf::from("/path/to/config.toml"));
+            }
+            _ => panic!("expected Keys command"),
+        }
     }
 
     #[tokio::test]

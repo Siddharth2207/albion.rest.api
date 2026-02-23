@@ -156,10 +156,7 @@ async fn main() {
     };
 
     let config_path = match &command {
-        cli::Command::Serve { config } => config.clone(),
-        cli::Command::Keys { .. } => std::env::current_dir()
-            .unwrap_or_default()
-            .join("config/dev.toml"),
+        cli::Command::Serve { config } | cli::Command::Keys { config, .. } => config.clone(),
     };
 
     let cfg = match config::Config::load(&config_path) {
@@ -252,7 +249,7 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        cli::Command::Keys { command } => {
+        cli::Command::Keys { command, .. } => {
             if let Err(e) = cli::handle_keys_command(command, pool).await {
                 tracing::error!(error = %e, "keys command failed");
                 drop(log_guard);
