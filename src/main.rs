@@ -63,7 +63,6 @@ enum StartupError {
         routes::trades::get_trades_by_tx,
         routes::trades::get_trades_by_address,
         routes::registry::get_registry,
-        routes::admin::put_registry,
     ),
     components(),
     modifiers(&SecurityAddon),
@@ -75,7 +74,6 @@ enum StartupError {
         (name = "Orders", description = "Order listing and query endpoints"),
         (name = "Trades", description = "Trade listing and query endpoints"),
         (name = "Registry", description = "Registry information endpoints"),
-        (name = "Admin", description = "Admin management endpoints"),
     ),
     info(
         title = "st0x REST API",

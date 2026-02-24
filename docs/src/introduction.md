@@ -1,6 +1,6 @@
 # Introduction
 
-The st0x API provides programmatic access to on-chain orderbook operations on the Base network (Chain ID 8453). Through the API you can:
+The st0x API powers the [st0x platform](https://platform.st0x.io/), providing programmatic access to swap, trade, and manage tokenized assets on the Base network. Through the API you can:
 
 - Discover available tokens
 - Get swap quotes and generate transaction calldata

@@ -53,13 +53,13 @@ A common integration flow looks like this:
 1. **List tokens** — `GET /v1/tokens` to discover available trading pairs
 2. **Get a quote** — `POST /v1/swap/quote` to see estimated pricing
 3. **Get calldata** — `POST /v1/swap/calldata` to generate the transaction
-4. **Handle approvals** — If the response includes `approvals`, send those transactions first
-5. **Execute the swap** — Submit the main transaction on-chain
+4. **Handle approvals** — If the response includes `approvals`, send those transactions on-chain, then call the calldata endpoint again
+5. **Execute the swap** — Once approvals are in place, the calldata response contains the transaction to submit on-chain
 
-For longer-running strategies, you can create orders and monitor their trades. Like swaps, the order endpoints return calldata that you execute on-chain yourself:
+You can also create orders and monitor their trades. Like swaps, the order endpoints return calldata that you execute on-chain yourself:
 
-1. **Get order calldata** — `POST /v1/order/dca` or `POST /v1/order/solver` to generate the deployment transaction
-2. **Handle approvals and execute** — Send approval transactions if needed, then submit the order transaction on-chain
+1. **Get order calldata** — `POST /v1/order/dca` or `POST /v1/order/solver`
+2. **Handle approvals** — If approvals are returned, send them on-chain, then call the endpoint again to get the deployment calldata
 3. **Monitor** — `GET /v1/order/{order_hash}` for status, `GET /v1/trades/{address}` for fills
 4. **Cancel** — `POST /v1/order/cancel` to get cancellation calldata, then execute on-chain
 

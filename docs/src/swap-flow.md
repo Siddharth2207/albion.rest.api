@@ -81,10 +81,14 @@ Set `maximumIoRatio` slightly above the `estimatedIoRatio` from the quote to all
 
 ### Response
 
+The response always includes all fields, but the content depends on whether your `taker` address has sufficient token approvals.
+
+**If approvals are needed**, `data` is empty and `approvals` contains the required transactions:
+
 ```json
 {
   "to": "0xOrderbookContractAddress",
-  "data": "0x...",
+  "data": "0x",
   "value": "0x0",
   "estimatedInput": "2500.0",
   "approvals": [
@@ -99,26 +103,37 @@ Set `maximumIoRatio` slightly above the `estimatedIoRatio` from the quote to all
 }
 ```
 
+**If approvals are already in place**, `approvals` is empty and `data` contains the swap calldata:
+
+```json
+{
+  "to": "0xOrderbookContractAddress",
+  "data": "0xabcdef...",
+  "value": "0x0",
+  "estimatedInput": "2500.0",
+  "approvals": []
+}
+```
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `to` | string | Contract address to send the transaction to |
-| `data` | string | Encoded transaction calldata |
+| `data` | string | Encoded transaction calldata — empty (`"0x"`) when approvals are needed |
 | `value` | string | Native token value to send (usually `"0x0"`) |
 | `estimatedInput` | string | Expected input amount |
-| `approvals` | array | Token approvals required before executing |
+| `approvals` | array | Token approvals needed — if non-empty, approve first then call this endpoint again |
 
 ## Step 3: Handle Approvals
 
-If the `approvals` array is **not empty**, you must send approval transactions before the swap. Each approval grants the orderbook contract permission to spend your tokens.
+If the `approvals` array is **not empty**, send the approval transactions first:
 
-For each approval:
-
-1. Send a transaction to the `token` address with `approvalData` as calldata
+1. For each approval, send a transaction to the `token` address with `approvalData` as calldata
 2. Wait for confirmation
+3. **Call the calldata endpoint again** — with approvals in place, the response will now contain the swap calldata
 
 ## Step 4: Execute the Swap
 
-After approvals are confirmed, send the main transaction using `to`, `data`, and `value` from the calldata response.
+Once you receive a response with an empty `approvals` array, send the main transaction using `to`, `data`, and `value`.
 
 ## Complete Example
 
@@ -147,9 +162,29 @@ CALLDATA=$(curl -s -X POST https://api.st0x.io/v1/swap/calldata \
     "maximumIoRatio": "2600.0"
   }')
 
-# 3. Check approvals
-echo "$CALLDATA" | jq .approvals
+# 3. Check if approvals are needed
+#    The first response only contains approvals — "data" will be empty ("0x").
+#    You must send the approval transactions on-chain first, then call
+#    the calldata endpoint again to get the actual swap calldata.
+APPROVALS=$(echo "$CALLDATA" | jq '.approvals')
+if [ "$APPROVALS" != "[]" ]; then
+  # Send each approval transaction on-chain...
+  # (use approvalData from each entry as calldata to the token address)
 
-# 4. Send approval transactions (if any), then the main transaction
+  # Now call the calldata endpoint again — this time approvals are in place
+  # and the response will contain the swap calldata in "data"
+  CALLDATA=$(curl -s -X POST https://api.st0x.io/v1/swap/calldata \
+    -H "Authorization: Basic <credentials>" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "taker": "0xYourWalletAddress",
+      "inputToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "outputToken": "0x4200000000000000000000000000000000000006",
+      "outputAmount": "1.0",
+      "maximumIoRatio": "2600.0"
+    }')
+fi
+
+# 4. Execute the swap transaction using to, data, and value from the response
 echo "$CALLDATA" | jq '{to, data, value}'
 ```

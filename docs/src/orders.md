@@ -43,10 +43,12 @@ curl -X POST https://api.st0x.io/v1/order/dca \
 
 ### Response
 
+The response always includes all fields. If approvals are needed, `data` is empty and `approvals` contains the required transactions:
+
 ```json
 {
   "to": "0xOrderbookContractAddress",
-  "data": "0x...",
+  "data": "0x",
   "value": "0x0",
   "approvals": [
     {
@@ -60,7 +62,16 @@ curl -X POST https://api.st0x.io/v1/order/dca \
 }
 ```
 
-Send any required approval transactions first, then submit the main transaction to deploy the order.
+Send each approval transaction on-chain, then call the endpoint again. Once approvals are in place, `approvals` is empty and `data` contains the deployment calldata:
+
+```json
+{
+  "to": "0xOrderbookContractAddress",
+  "data": "0xabcdef...",
+  "value": "0x0",
+  "approvals": []
+}
+```
 
 ## Get Solver Order Calldata
 

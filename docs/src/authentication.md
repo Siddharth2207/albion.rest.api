@@ -37,8 +37,6 @@ curl -u "abc123:mysecret" https://api.st0x.io/v1/tokens
 | Status | Code | When |
 |--------|------|------|
 | 401 | `UNAUTHORIZED` | Missing or invalid credentials |
-| 403 | `FORBIDDEN` | Valid credentials but insufficient permissions (e.g. non-admin calling admin endpoints) |
-
 ```json
 {
   "error": {
@@ -46,8 +44,3 @@ curl -u "abc123:mysecret" https://api.st0x.io/v1/tokens
     "message": "Invalid API key or secret"
   }
 }
-```
-
-## Admin Endpoints
-
-Some endpoints (like `PUT /admin/registry`) require admin-level API keys. Standard keys will receive a `403 FORBIDDEN` response on these routes.
