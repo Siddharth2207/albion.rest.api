@@ -4,7 +4,7 @@ The st0x API powers the [st0x platform](https://platform.st0x.io/), providing pr
 
 - Discover available tokens
 - Get swap quotes and generate transaction calldata
-- Deploy and manage DCA and solver orders
+- Deploy and manage DCA orders
 - Monitor trades
 
 **Base URL:** `https://api.st0x.io`

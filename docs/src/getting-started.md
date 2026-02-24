@@ -58,7 +58,7 @@ A common integration flow looks like this:
 
 You can also create orders and monitor their trades. Like swaps, the order endpoints return calldata that you execute on-chain yourself:
 
-1. **Get order calldata** — `POST /v1/order/dca` or `POST /v1/order/solver`
+1. **Get order calldata** — `POST /v1/order/dca`
 2. **Handle approvals** — If approvals are returned, send them on-chain, then call the endpoint again to get the deployment calldata
 3. **Monitor** — `GET /v1/order/{order_hash}` for status, `GET /v1/trades/{address}` for fills
 4. **Cancel** — `POST /v1/order/cancel` to get cancellation calldata, then execute on-chain

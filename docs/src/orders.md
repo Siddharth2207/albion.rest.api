@@ -1,6 +1,6 @@
 # Order Management
 
-Orders are persistent on-chain strategies that execute over time. The API supports two order types: **DCA** (Dollar Cost Averaging) and **Solver** orders.
+Orders are persistent on-chain strategies that execute over time.
 
 The order endpoints return transaction calldata — the API does not execute transactions for you. You receive `to`, `data`, and `value` fields (plus any required token `approvals`) and submit those transactions on-chain yourself, the same pattern as the [Swap Flow](./swap-flow.md).
 
@@ -72,41 +72,6 @@ Send each approval transaction on-chain, then call the endpoint again. Once appr
   "approvals": []
 }
 ```
-
-## Get Solver Order Calldata
-
-```
-POST /v1/order/solver
-```
-
-Returns calldata to deploy a solver order that offers tokens at a fixed IO ratio.
-
-### Request
-
-```bash
-curl -X POST https://api.st0x.io/v1/order/solver \
-  -H "Authorization: Basic <credentials>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "inputToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-    "outputToken": "0x4200000000000000000000000000000000000006",
-    "amount": "5000",
-    "ioRatio": "2500.0"
-  }'
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `inputToken` | string | Token to spend |
-| `outputToken` | string | Token to receive |
-| `amount` | string | Amount to offer in human-readable units |
-| `ioRatio` | string | Fixed input-to-output ratio |
-| `inputVaultId` | string (optional) | Existing vault ID for input token |
-| `outputVaultId` | string (optional) | Existing vault ID for output token |
-
-### Response
-
-The response has the same shape as the DCA response — calldata to execute on-chain, with the same approval flow.
 
 ## Get Order Details
 
