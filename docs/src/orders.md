@@ -222,6 +222,8 @@ curl https://api.st0x.io/v1/orders/tx/0xTxHash... \
   -H "Authorization: Basic <credentials>"
 ```
 
+### Response
+
 ```json
 {
   "txHash": "0xTxHash...",
