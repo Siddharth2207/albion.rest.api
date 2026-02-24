@@ -104,7 +104,9 @@ curl -X POST https://api.st0x.io/v1/order/solver \
 | `inputVaultId` | string (optional) | Existing vault ID for input token |
 | `outputVaultId` | string (optional) | Existing vault ID for output token |
 
-The response has the same shape as the DCA response — calldata to execute on-chain.
+### Response
+
+The response has the same shape as the DCA response — calldata to execute on-chain, with the same approval flow.
 
 ## Get Order Details
 

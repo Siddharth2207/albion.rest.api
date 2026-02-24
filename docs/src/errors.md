@@ -19,7 +19,6 @@ All error responses follow a consistent format.
 |-------------|------|-------------|
 | 400 | `BAD_REQUEST` | Invalid request body, missing fields, or malformed parameters |
 | 401 | `UNAUTHORIZED` | Missing or invalid authentication credentials |
-| 403 | `FORBIDDEN` | Valid credentials but insufficient permissions |
 | 404 | `NOT_FOUND` | Requested resource does not exist |
 | 429 | `RATE_LIMITED` | Too many requests — see [Rate Limiting](./rate-limiting.md) |
 | 500 | `INTERNAL_ERROR` | Unexpected server error |

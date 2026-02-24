@@ -7,5 +7,6 @@
 - [Swap Flow](./swap-flow.md)
 - [Order Management](./orders.md)
 - [Trade Monitoring](./trades.md)
+- [Registry](./registry.md)
 - [Error Handling](./errors.md)
 - [Rate Limiting](./rate-limiting.md)
