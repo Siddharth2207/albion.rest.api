@@ -1,6 +1,6 @@
 use crate::types::common::TokenRef;
 use alloy::primitives::{Address, FixedBytes};
-use rocket::form::FromForm;
+use rocket::form::{FromForm, FromFormField};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -8,6 +8,27 @@ use utoipa::{IntoParams, ToSchema};
 #[into_params(parameter_in = Query)]
 #[serde(rename_all = "camelCase")]
 pub struct OrdersPaginationParams {
+    #[field(name = "page")]
+    #[param(example = 1)]
+    pub page: Option<u32>,
+    #[field(name = "pageSize")]
+    #[param(example = 20)]
+    pub page_size: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromFormField, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum OrderSide {
+    Input,
+    Output,
+}
+
+#[derive(Debug, Clone, FromForm, Serialize, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(rename_all = "camelCase")]
+pub struct OrdersByTokenParams {
+    #[field(name = "side")]
+    pub side: Option<OrderSide>,
     #[field(name = "page")]
     #[param(example = 1)]
     pub page: Option<u32>,
