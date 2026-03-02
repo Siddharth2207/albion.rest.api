@@ -3,8 +3,8 @@ set -euxo pipefail
 
 export COMMIT_SHA=$(git rev-parse HEAD)
 
-# Initialize and update the ethgild submodule
-echo "Initializing ethgild submodule..."
+# Initialize and update all submodules
+echo "Initializing all submodules..."
 git submodule update --init --recursive
 
 echo "Running orderbook prep-base..."
