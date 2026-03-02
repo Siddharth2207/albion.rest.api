@@ -1,6 +1,9 @@
 use crate::error::ApiError;
+use rain_orderbook_common::local_db::executor::RusqliteExecutor;
+use rain_orderbook_common::raindex_client::local_db::LocalDb;
 use rain_orderbook_common::raindex_client::RaindexClient;
 use rain_orderbook_js_api::registry::DotrainRegistry;
+use std::path::PathBuf;
 
 enum WorkerError {
     RuntimeInit(std::io::Error),
@@ -10,6 +13,7 @@ enum WorkerError {
 #[derive(Debug)]
 pub(crate) struct RaindexProvider {
     registry: DotrainRegistry,
+    db_path: Option<PathBuf>,
 }
 
 impl RaindexProvider {
@@ -35,11 +39,22 @@ impl RaindexProvider {
 
         rx.await
             .map_err(|_| RaindexProviderError::WorkerPanicked)?
-            .map(|registry| Self { registry })
+            .map(|registry| Self {
+                registry,
+                db_path: None,
+            })
             .map_err(|e| match e {
                 WorkerError::RuntimeInit(e) => RaindexProviderError::RegistryRuntimeInit(e),
                 WorkerError::Api(e) => RaindexProviderError::RegistryLoad(e),
             })
+    }
+
+    pub(crate) fn set_db_path(&mut self, path: PathBuf) {
+        self.db_path = Some(path);
+    }
+
+    pub(crate) fn registry(&self) -> &DotrainRegistry {
+        &self.registry
     }
 
     pub(crate) fn registry_url(&self) -> String {
@@ -53,6 +68,7 @@ impl RaindexProvider {
         Fut: std::future::Future<Output = T>,
     {
         let registry = self.registry.clone();
+        let db_path = self.db_path.clone();
         let (tx, rx) = tokio::sync::oneshot::channel::<Result<T, WorkerError>>();
 
         std::thread::spawn(move || {
@@ -72,6 +88,13 @@ impl RaindexProvider {
                 let client = registry
                     .get_raindex_client()
                     .map_err(|e| WorkerError::Api(e.to_string()))?;
+
+                if let Some(path) = db_path {
+                    let executor = RusqliteExecutor::new(&path);
+                    let local_db = LocalDb::new(executor);
+                    client.set_local_db(local_db);
+                }
+
                 Ok(f(client).await)
             });
 
