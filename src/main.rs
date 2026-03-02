@@ -247,8 +247,14 @@ async fn main() {
             }
 
             let settings_yaml = raindex_config.registry().settings();
-            sync::start_sync(settings_yaml, local_db_path.clone());
-            tracing::info!(local_db_path = %cfg.local_db_path, "local db sync started");
+            let _sync_handle = match sync::start_sync(settings_yaml, local_db_path.clone()) {
+                Ok(handle) => handle,
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to start local db sync");
+                    drop(log_guard);
+                    std::process::exit(1);
+                }
+            };
 
             raindex_config.set_db_path(local_db_path);
 
