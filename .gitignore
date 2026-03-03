@@ -1,0 +1,6 @@
+/target
+.env
+logs/
+data/*
+!data/.gitkeep
+docs/book/
