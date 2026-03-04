@@ -53,12 +53,16 @@ enum StartupError {
     paths(
         routes::health::get_health,
         routes::tokens::get_tokens,
+        routes::mint::post_mint,
+        routes::schemas::post_schemas,
     ),
-    components(),
+    components(schemas(crate::types::schemas::GetSchemasRequest, crate::types::schemas::SchemaQueryResponse)),
     modifiers(&SecurityAddon),
     tags(
         (name = "Health", description = "Health check endpoints"),
         (name = "Tokens", description = "Token information endpoints"),
+        (name = "Mint", description = "Mint transaction endpoints"),
+        (name = "Schemas", description = "Offchain asset receipt vault schema endpoints"),
     ),
     info(
         title = "Albion REST API",
@@ -111,6 +115,8 @@ pub(crate) fn rocket(
         .manage(raindex_config)
         .mount("/", routes::health::routes())
         .mount("/v1/tokens", routes::tokens::routes())
+        .mount("/v1/mint", routes::mint::routes())
+        .mount("/v1/schemas", routes::schemas::routes())
         .mount("/docs", FileServer::new(docs_dir, options))
         .mount(
             "/",
@@ -121,6 +127,7 @@ pub(crate) fn rocket(
         .attach(fairings::UsageLogger)
         .attach(fairings::RateLimitHeadersFairing)
         .attach(routes::tokens::fairing())
+        .attach(routes::schemas::fairing())
         .attach(cors))
 }
 
