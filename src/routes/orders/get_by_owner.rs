@@ -110,7 +110,9 @@ pub async fn get_orders_by_address(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::routes::order::test_fixtures::{mock_order, mock_quote};
+    use crate::routes::order::test_fixtures::{
+        mock_order, mock_order_with_shared_vaults, mock_quote,
+    };
     use crate::routes::orders::test_fixtures::MockOrdersListDataSource;
     use crate::test_helpers::{basic_auth_header, seed_api_key, TestClientBuilder};
     use rocket::http::{Header, Status};
@@ -186,6 +188,26 @@ mod tests {
             .unwrap();
         let result = process_get_orders_by_owner(&ds, addr, None, None).await;
         assert!(matches!(result, Err(ApiError::Internal(_))));
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_owner_shared_vaults() {
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![mock_order_with_shared_vaults()]),
+            total_count: 1,
+            quotes: Ok(vec![mock_quote("200.0")]),
+        };
+        let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            .parse()
+            .unwrap();
+        let result = process_get_orders_by_owner(&ds, addr, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.orders.len(), 1);
+        assert_eq!(result.orders[0].input_token.symbol, "wtMSTR");
+        assert_eq!(result.orders[0].output_token.symbol, "wtMSTR");
+        assert_eq!(result.orders[0].io_ratio, "200.0");
     }
 
     #[rocket::async_test]

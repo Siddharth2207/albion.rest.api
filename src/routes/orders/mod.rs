@@ -67,17 +67,7 @@ pub(crate) fn build_order_summary(
     order: &RaindexOrder,
     io_ratio: &str,
 ) -> Result<OrderSummary, ApiError> {
-    let inputs = order.inputs_list().items();
-    let outputs = order.outputs_list().items();
-
-    let input = inputs.first().ok_or_else(|| {
-        tracing::error!("order has no input vaults");
-        ApiError::Internal("order has no input vaults".into())
-    })?;
-    let output = outputs.first().ok_or_else(|| {
-        tracing::error!("order has no output vaults");
-        ApiError::Internal("order has no output vaults".into())
-    })?;
+    let (input, output) = super::resolve_io_vaults(order)?;
 
     let input_token_info = input.token();
     let output_token_info = output.token();
