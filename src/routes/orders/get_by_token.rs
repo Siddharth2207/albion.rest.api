@@ -128,7 +128,9 @@ pub async fn get_orders_by_token(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::routes::order::test_fixtures::{mock_order, mock_quote};
+    use crate::routes::order::test_fixtures::{
+        mock_order, mock_order_with_shared_vaults, mock_quote,
+    };
     use crate::routes::orders::test_fixtures::MockOrdersListDataSource;
     use crate::test_helpers::{basic_auth_header, seed_api_key, TestClientBuilder};
     use rocket::http::{Header, Status};
@@ -204,6 +206,25 @@ mod tests {
             .unwrap();
         let result = process_get_orders_by_token(&ds, addr, None, None, None).await;
         assert!(matches!(result, Err(ApiError::Internal(_))));
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_token_shared_vaults() {
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![mock_order_with_shared_vaults()]),
+            total_count: 1,
+            quotes: Ok(vec![mock_quote("200.0")]),
+        };
+        let addr: Address = "0xff05e1bd696900dc6a52ca35ca61bb1024eda8e2"
+            .parse()
+            .unwrap();
+        let result = process_get_orders_by_token(&ds, addr, None, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.orders.len(), 1);
+        assert_eq!(result.orders[0].input_token.symbol, "wtMSTR");
+        assert_eq!(result.orders[0].output_token.symbol, "wtMSTR");
     }
 
     #[rocket::async_test]

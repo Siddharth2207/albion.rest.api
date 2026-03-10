@@ -84,18 +84,7 @@ fn build_order_detail(
     io_ratio: &str,
     trades: &[RaindexTrade],
 ) -> Result<OrderDetail, ApiError> {
-    // The current application only supports single-pair orders (one input vault, one output vault).
-    let inputs = order.inputs_list().items();
-    let outputs = order.outputs_list().items();
-
-    let input = inputs.first().ok_or_else(|| {
-        tracing::error!("order has no input vaults");
-        ApiError::Internal("order has no input vaults".into())
-    })?;
-    let output = outputs.first().ok_or_else(|| {
-        tracing::error!("order has no output vaults");
-        ApiError::Internal("order has no output vaults".into())
-    })?;
+    let (input, output) = crate::routes::resolve_io_vaults(order)?;
 
     let input_token_info = input.token();
     let output_token_info = output.token();
@@ -257,6 +246,25 @@ mod tests {
         };
         let result = process_get_order(&ds, test_hash()).await;
         assert!(matches!(result, Err(ApiError::Internal(_))));
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_order_shared_vaults() {
+        let ds = MockOrderDataSource {
+            orders: Ok(vec![mock_order_with_shared_vaults()]),
+            trades: Ok(vec![]),
+            quotes: Ok(vec![mock_quote("200.0")]),
+            calldata: Ok(Bytes::new()),
+        };
+        let hash = "0x000000000000000000000000000000000000000000000000000000000000beef"
+            .parse()
+            .unwrap();
+        let detail = process_get_order(&ds, hash).await.unwrap();
+
+        assert_eq!(detail.input_token.symbol, "wtMSTR");
+        assert_eq!(detail.output_token.symbol, "wtMSTR");
+        assert_eq!(detail.input_vault_balance, "0");
+        assert_eq!(detail.output_vault_balance, "0");
     }
 
     #[rocket::async_test]

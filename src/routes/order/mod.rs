@@ -261,6 +261,85 @@ pub(crate) mod test_fixtures {
         serde_json::from_value(order_json()).expect("deserialize mock RaindexOrder")
     }
 
+    pub fn order_with_shared_vaults_json() -> serde_json::Value {
+        let rc = stub_raindex_client();
+        let shared_vault = |id: &str,
+                            token_address: &str,
+                            token_name: &str,
+                            token_symbol: &str,
+                            decimals: u8,
+                            balance: &str,
+                            formatted_balance: &str| {
+            json!({
+                "raindexClient": rc,
+                "chainId": 8453,
+                "vaultType": "input",
+                "id": id,
+                "owner": "0x0000000000000000000000000000000000000001",
+                "vaultId": "0x0000000000000000000000000000000000000000000000000000000000000fab",
+                "balance": balance,
+                "formattedBalance": formatted_balance,
+                "token": {
+                    "chainId": 8453,
+                    "id": token_address,
+                    "address": token_address,
+                    "name": token_name,
+                    "symbol": token_symbol,
+                    "decimals": decimals
+                },
+                "orderbook": "0xd2938e7c9fe3597f78832ce780feb61945c377d7",
+                "ordersAsInputs": [],
+                "ordersAsOutputs": []
+            })
+        };
+        let vault_a = shared_vault(
+            "0x03",
+            "0xff05e1bd696900dc6a52ca35ca61bb1024eda8e2",
+            "Wrapped MicroStrategy",
+            "wtMSTR",
+            18,
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "0",
+        );
+        let vault_b = shared_vault(
+            "0x04",
+            "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",
+            "Wrapped BTC",
+            "WBTC",
+            8,
+            "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "0",
+        );
+        json!({
+            "raindexClient": rc,
+            "chainId": 8453,
+            "id": "0x0000000000000000000000000000000000000000000000000000000000000002",
+            "orderBytes": "0x01",
+            "orderHash": "0x000000000000000000000000000000000000000000000000000000000000beef",
+            "owner": "0x0000000000000000000000000000000000000001",
+            "orderbook": "0xd2938e7c9fe3597f78832ce780feb61945c377d7",
+            "active": true,
+            "timestampAdded": "0x000000000000000000000000000000000000000000000000000000006553f100",
+            "meta": null,
+            "parsedMeta": [],
+            "rainlang": null,
+            "transaction": {
+                "id": "0x0000000000000000000000000000000000000000000000000000000000000099",
+                "from": "0x0000000000000000000000000000000000000001",
+                "blockNumber": "0x0000000000000000000000000000000000000000000000000000000000000001",
+                "timestamp": "0x000000000000000000000000000000000000000000000000000000006553f100"
+            },
+            "tradesCount": 0,
+            "inputs": [vault_a.clone(), vault_b.clone()],
+            "outputs": [vault_a, vault_b]
+        })
+    }
+
+    pub fn mock_order_with_shared_vaults() -> RaindexOrder {
+        serde_json::from_value(order_with_shared_vaults_json())
+            .expect("deserialize mock RaindexOrder with shared vaults")
+    }
+
     pub fn mock_trade() -> RaindexTrade {
         serde_json::from_value(trade_json()).expect("deserialize mock RaindexTrade")
     }
