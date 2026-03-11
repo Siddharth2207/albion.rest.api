@@ -39,6 +39,7 @@ pub async fn sort_claims_data(
             if let Some(ts) = lr.timestamp {
                 decoded.timestamp = ts_to_iso(ts);
             }
+            decoded.tx_hash = lr.log.transaction_hash.clone();
             Some(decoded)
         })
         .filter(|d| d.address != ZERO_ADDRESS)
@@ -79,6 +80,7 @@ pub async fn sort_claims_data(
                 address: row.address.clone(),
                 amount: row.amount.clone(),
                 claimed: false,
+                order_hash: order_hash.clone(),
             });
         }
     }

@@ -35,6 +35,8 @@ pub struct UnclaimedCsvRow {
     pub address: String,
     pub amount: String,
     pub claimed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_hash: Option<String>,
 }
 
 // ── Decoded Context event log ─────────────────────────────────────────────────
@@ -45,6 +47,8 @@ pub struct DecodedClaimLog {
     pub address: String,
     pub amount: String,
     pub timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
 }
 
 // ── Output shapes ─────────────────────────────────────────────────────────────

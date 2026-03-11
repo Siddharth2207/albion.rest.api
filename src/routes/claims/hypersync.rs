@@ -260,6 +260,7 @@ pub fn decode_log_data(data: &str) -> Option<DecodedClaimLog> {
         address,
         amount: amount_val.to_string(),
         timestamp: None,
+        tx_hash: None,
     })
 }
 
