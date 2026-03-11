@@ -18,6 +18,9 @@ utoipa = { version = "5", features = ["rocket_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["rocket"] }
 tokio = { version = "1", features = ["full"] }
 alloy = { version = "=1.0.9", default-features = false, features = ["std", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+k256 = { version = "0.13", features = ["ecdsa"] }
+hex = "0.4"
 async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
