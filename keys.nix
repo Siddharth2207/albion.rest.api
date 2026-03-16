@@ -1,18 +1,20 @@
 rec {
   keys = {
-    st0x-op =
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPZ56nOYbGDd0ZfbqxeY7AbvaQGQrHnlC80ccpRGpCoj";
+    albion-op =
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXXJvJgZ9eUqD7ssxswi0GNFTfIXsfeHhntoUOkNFNI";
+
     host =
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK9JhlVsHGlSS3c+RGKFSwXyuFpvUTbnOny9e2AdBQ6G";
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN4yvX1MSnqzaBhATDS7qQNPLHG+h/v92YLnyrqZnudh";
+
     ci =
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPTd2zKSwHgWegi290EiK5nYp1Wp4+x2fDYqFxbd0WLN";
+
     arda =
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAyTREGZCOzMsl7N9dp1saN/t7DCs7YesusVUKApMJ78";
-    sid = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPl3/6RlR6Rvz0ZRyZukzFtt4zUYNz5OVuTsajJl7V3n";
   };
 
   roles = with keys; {
-    infra = [ st0x-op ci sid ];
-    ssh = [ st0x-op ci arda sid ];
+    infra = [ ci albion-op ];
+    ssh   = [ ci arda albion-op ];
   };
 }
