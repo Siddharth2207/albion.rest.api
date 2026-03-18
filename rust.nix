@@ -7,7 +7,7 @@ let
   };
 
   libDir = builtins.path {
-    path = ./lib;
+    path = builtins.getEnv "PWD" + "/lib";
     name = "lib";
   };
 
