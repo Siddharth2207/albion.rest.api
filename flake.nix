@@ -182,6 +182,14 @@
               packages.deployNixos
               packages.deployService
               packages.deployAll
+              packages.tfInit                                                                          
+              packages.tfPlan                                                                          
+              packages.tfApply                                                                         
+              packages.tfDestroy                                                                       
+              packages.tfEditVars                                                                      
+              packages.tfRekey                                                                         
+              packages.bootstrap                                                                       
+              packages.resolveIp
             ] ++ rainix.devShells.${system}.default.buildInputs;
         };
       });

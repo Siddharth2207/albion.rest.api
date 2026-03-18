@@ -1,8 +1,13 @@
 { pkgs, craneLib, sqlx-cli }:
 
 let
+  solcReleases = pkgs.fetchurl {
+    url = "https://binaries.soliditylang.org/linux-amd64/list.json";
+    sha256 = "sha256-L3zgoNUWLfEAFMNtPGTnIkn9+fCwRYNFlv7u8bysS9E=";
+  };
+
   libDir = builtins.path {
-    path = builtins.getEnv "PWD" + "/lib";
+    path = ./lib;
     name = "lib";
   };
 
@@ -17,6 +22,13 @@ let
     src = ./.;
     cargoLock = ./Cargo.lock;
   };
+
+  patchSvmBuildRs = ''
+    while IFS= read -r -d "" file; do
+      substituteInPlace "$file" \
+        --replace "https://binaries.soliditylang.org/linux-amd64/list.json" "${solcReleases}"
+    done < <(find . -path "*/svm-rs-builds-*/build.rs" -print0)
+  '';
 
   commonArgs = {
     pname = "st0x-rest-api";
@@ -37,9 +49,13 @@ let
       rm -rf $sourceRoot/lib
       ln -s ${libDir} $sourceRoot/lib
     '';
+
+    postPatch = patchSvmBuildRs;
   };
 
-  cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { src = depsSrc; });
+  cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
+    src = depsSrc;
+  });
 
   sqlxSetup = ''
     set -eo pipefail
