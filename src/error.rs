@@ -113,10 +113,15 @@ mod tests {
         Err(ApiError::Internal("something broke".into()))
     }
 
+    #[get("/rate-limited")]
+    fn rate_limited() -> Result<(), ApiError> {
+        Err(ApiError::RateLimited("too many requests".into()))
+    }
+
     fn error_client() -> Client {
         let rocket = rocket::build().mount(
             "/",
-            rocket::routes![bad_request, unauthorized, not_found, internal],
+            rocket::routes![bad_request, unauthorized, not_found, internal, rate_limited],
         );
         Client::tracked(rocket).expect("valid rocket instance")
     }
@@ -164,6 +169,29 @@ mod tests {
             500,
             "INTERNAL_ERROR",
             "something broke",
+        );
+    }
+
+    #[test]
+    fn test_rate_limited_returns_429_with_retry_after_header() {
+        let client = error_client();
+        let response = client.get("/rate-limited").dispatch();
+        assert_eq!(response.status().code, 429);
+        let body: serde_json::Value =
+            serde_json::from_str(&response.into_string().unwrap()).unwrap();
+        assert_eq!(body["error"]["code"], "RATE_LIMITED");
+        assert_eq!(body["error"]["message"], "too many requests");
+    }
+
+    #[test]
+    fn test_rate_limited_has_retry_after_header() {
+        let client = error_client();
+        let response = client.get("/rate-limited").dispatch();
+        let retry_after = response.headers().get_one("Retry-After");
+        assert_eq!(
+            retry_after,
+            Some("60"),
+            "RateLimited response must include Retry-After: 60 header"
         );
     }
 }

@@ -531,8 +531,54 @@ async fn test_orders_by_owner_invalid_address_returns_422() {
 }
 
 // ---------------------------------------------------------------------------
+// Orders by owner – pagination query params accepted at HTTP level
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_orders_by_owner_accepts_pagination_query_params() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    // The route should accept page and pageSize query params without returning
+    // 400/422 — even though the underlying subgraph call may fail or return
+    // empty, the query params themselves must parse successfully.
+    let response = client
+        .get("/v1/orders/owner/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?page=2&pageSize=10")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    // Should not be a client error due to param parsing; 500 from subgraph is acceptable
+    let status = response.status().code;
+    assert!(
+        status != 400 && status != 422,
+        "pagination params should be accepted, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Orders by token – GET /v1/orders/token/<address>
 // ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_orders_by_token_accepts_pagination_and_side_query_params() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/token/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?page=1&pageSize=50&side=input")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status != 400 && status != 422,
+        "pagination + side params should be accepted, got {status}"
+    );
+}
 
 #[rocket::async_test]
 async fn test_orders_by_token_invalid_address_returns_422() {
@@ -762,18 +808,20 @@ async fn test_rate_limiting_returns_429_with_retry_after() {
             .await;
     }
 
-    // The next authenticated request should be rate-limited
+    // The next authenticated request must be rate-limited
     let response = client
         .get("/v1/tokens")
         .header(Header::new("Authorization", header))
         .dispatch()
         .await;
 
-    if response.status() == Status::TooManyRequests {
-        let body = parse_json(&response.into_string().await.unwrap());
-        assert_error_shape(&body, "RATE_LIMITED");
-    }
-    // If not 429 yet (race with window), the test still passes — we verified shape when it triggers
+    assert_eq!(
+        response.status(),
+        Status::TooManyRequests,
+        "expected 429 after exhausting global rate limit of 2 RPM"
+    );
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "RATE_LIMITED");
 }
 
 // ---------------------------------------------------------------------------

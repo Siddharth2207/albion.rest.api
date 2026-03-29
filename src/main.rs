@@ -333,7 +333,12 @@ mod tests {
             .header(Header::new("Authorization", header))
             .dispatch()
             .await;
-        assert_ne!(response.status(), Status::Unauthorized);
+        assert_eq!(
+            response.status(),
+            Status::Ok,
+            "valid auth should return 200, got {}",
+            response.status()
+        );
     }
 
     #[rocket::async_test]

@@ -275,4 +275,65 @@ mod tests {
             .await;
         assert_eq!(response.status(), Status::UnprocessableEntity);
     }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_token_explicit_page_and_page_size() {
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![mock_order()]),
+            total_count: 200,
+            quotes: Ok(vec![mock_quote("1.5")]),
+        };
+        let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            .parse()
+            .unwrap();
+        let result = process_get_orders_by_token(&ds, addr, None, Some(3), Some(25))
+            .await
+            .unwrap();
+
+        assert_eq!(result.pagination.page, 3);
+        assert_eq!(result.pagination.page_size, 25);
+        assert_eq!(result.pagination.total_orders, 200);
+        assert_eq!(result.pagination.total_pages, 8);
+        assert!(result.pagination.has_more);
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_token_page_size_capped_at_max() {
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![]),
+            total_count: 0,
+            quotes: Ok(vec![]),
+        };
+        let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            .parse()
+            .unwrap();
+        let result = process_get_orders_by_token(&ds, addr, None, Some(1), Some(999))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.pagination.page_size,
+            super::super::MAX_PAGE_SIZE as u32,
+            "page_size should be capped at MAX_PAGE_SIZE"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_token_last_page_has_more_false() {
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![mock_order()]),
+            total_count: 50,
+            quotes: Ok(vec![mock_quote("1.5")]),
+        };
+        let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            .parse()
+            .unwrap();
+        let result = process_get_orders_by_token(&ds, addr, Some(OrderSide::Output), Some(2), Some(25))
+            .await
+            .unwrap();
+
+        assert_eq!(result.pagination.page, 2);
+        assert_eq!(result.pagination.total_pages, 2);
+        assert!(!result.pagination.has_more);
+    }
 }
