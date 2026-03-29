@@ -279,6 +279,25 @@ mod tests {
     }
 
     #[rocket::async_test]
+    async fn test_pagination_math_page_size_zero_returns_zero_pages() {
+        use super::super::build_pagination;
+
+        // page_size=0 is a degenerate case — should not panic or divide by zero
+        let p = build_pagination(100, 1, 0);
+        assert_eq!(p.total_pages, 0, "page_size=0 should yield 0 total_pages");
+        assert!(!p.has_more);
+    }
+
+    #[rocket::async_test]
+    async fn test_pagination_math_large_total() {
+        use super::super::build_pagination;
+
+        let p = build_pagination(u32::MAX, 1, 50);
+        assert!(p.total_pages > 0, "large total_count should not overflow");
+        assert!(p.has_more);
+    }
+
+    #[rocket::async_test]
     async fn test_process_get_orders_by_token_page_zero_treated_as_page_one() {
         let ds = MockOrdersListDataSource {
             orders: Ok(vec![mock_order()]),

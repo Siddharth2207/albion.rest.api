@@ -102,3 +102,95 @@ pub struct OrdersByTxResponse {
     pub timestamp: u64,
     pub orders: Vec<OrderByTxEntry>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_order_side_deserializes_input() {
+        let json = r#""input""#;
+        let side: OrderSide = serde_json::from_str(json).unwrap();
+        assert!(matches!(side, OrderSide::Input));
+    }
+
+    #[test]
+    fn test_order_side_deserializes_output() {
+        let json = r#""output""#;
+        let side: OrderSide = serde_json::from_str(json).unwrap();
+        assert!(matches!(side, OrderSide::Output));
+    }
+
+    #[test]
+    fn test_order_side_rejects_invalid() {
+        assert!(serde_json::from_str::<OrderSide>(r#""buy""#).is_err());
+        assert!(serde_json::from_str::<OrderSide>(r#""sell""#).is_err());
+        assert!(serde_json::from_str::<OrderSide>(r#""both""#).is_err());
+    }
+
+    #[test]
+    fn test_orders_pagination_serializes_camel_case() {
+        let pagination = OrdersPagination {
+            page: 1,
+            page_size: 20,
+            total_orders: 100,
+            total_pages: 5,
+            has_more: true,
+        };
+        let json = serde_json::to_string(&pagination).unwrap();
+        assert!(json.contains("\"pageSize\""));
+        assert!(json.contains("\"totalOrders\""));
+        assert!(json.contains("\"totalPages\""));
+        assert!(json.contains("\"hasMore\""));
+        assert!(!json.contains("\"page_size\""));
+    }
+
+    #[test]
+    fn test_orders_pagination_round_trip() {
+        let original = OrdersPagination {
+            page: 3,
+            page_size: 50,
+            total_orders: 200,
+            total_pages: 4,
+            has_more: false,
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: OrdersPagination = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.page, 3);
+        assert_eq!(deserialized.page_size, 50);
+        assert_eq!(deserialized.total_orders, 200);
+        assert!(!deserialized.has_more);
+    }
+
+    #[test]
+    fn test_orders_list_response_with_empty_orders() {
+        let resp = OrdersListResponse {
+            orders: vec![],
+            pagination: OrdersPagination {
+                page: 1,
+                page_size: 20,
+                total_orders: 0,
+                total_pages: 0,
+                has_more: false,
+            },
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"orders\":[]"));
+    }
+
+    #[test]
+    fn test_orders_pagination_params_page_is_optional() {
+        let json = r#"{}"#;
+        let params: OrdersPaginationParams = serde_json::from_str(json).unwrap();
+        assert!(params.page.is_none());
+        assert!(params.page_size.is_none());
+    }
+
+    #[test]
+    fn test_orders_pagination_params_with_values() {
+        let json = r#"{"page": 2, "pageSize": 50}"#;
+        let params: OrdersPaginationParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.page, Some(2));
+        assert_eq!(params.page_size, Some(50));
+    }
+}

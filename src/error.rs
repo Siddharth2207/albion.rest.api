@@ -220,4 +220,72 @@ mod tests {
             "RateLimited response must include Retry-After: 60 header"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Display trait – each variant produces human-readable messages
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bad_request_display() {
+        let err = ApiError::BadRequest("invalid input".into());
+        assert_eq!(err.to_string(), "Bad request: invalid input");
+    }
+
+    #[test]
+    fn test_unauthorized_display() {
+        let err = ApiError::Unauthorized("no token".into());
+        assert_eq!(err.to_string(), "Unauthorized: no token");
+    }
+
+    #[test]
+    fn test_forbidden_display() {
+        let err = ApiError::Forbidden("admin only".into());
+        assert_eq!(err.to_string(), "Forbidden: admin only");
+    }
+
+    #[test]
+    fn test_not_found_display() {
+        let err = ApiError::NotFound("order not found".into());
+        assert_eq!(err.to_string(), "Not found: order not found");
+    }
+
+    #[test]
+    fn test_internal_display() {
+        let err = ApiError::Internal("something broke".into());
+        assert_eq!(err.to_string(), "Internal error: something broke");
+    }
+
+    #[test]
+    fn test_rate_limited_display() {
+        let err = ApiError::RateLimited("too many requests".into());
+        assert_eq!(err.to_string(), "Rate limited: too many requests");
+    }
+
+    // -----------------------------------------------------------------------
+    // ApiErrorResponse – serialization
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_api_error_response_serializes() {
+        let resp = ApiErrorResponse {
+            request_id: "test-123".into(),
+            error: ApiErrorDetail {
+                code: "BAD_REQUEST".into(),
+                message: "invalid".into(),
+            },
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"request_id\""));
+        assert!(json.contains("\"code\""));
+        assert!(json.contains("\"message\""));
+    }
+
+    #[test]
+    fn test_api_error_response_deserializes() {
+        let json = r#"{"request_id":"abc","error":{"code":"NOT_FOUND","message":"gone"}}"#;
+        let resp: ApiErrorResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.request_id, "abc");
+        assert_eq!(resp.error.code, "NOT_FOUND");
+        assert_eq!(resp.error.message, "gone");
+    }
 }

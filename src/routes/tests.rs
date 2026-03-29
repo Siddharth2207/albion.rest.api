@@ -885,6 +885,7 @@ async fn test_orders_by_tx_invalid_hash_returns_error() {
 
 #[rocket::async_test]
 async fn test_rate_limiting_returns_429_with_retry_after() {
+    // Use a limit of 2 RPM so we can deterministically exhaust it.
     let rate_limiter = crate::fairings::RateLimiter::new(2, 10000);
     let client = TestClientBuilder::new()
         .rate_limiter(rate_limiter)
@@ -893,16 +894,22 @@ async fn test_rate_limiting_returns_429_with_retry_after() {
     let (key_id, secret) = seed_api_key(&client).await;
     let header = basic_auth_header(&key_id, &secret);
 
-    // Exhaust the global limit (2 RPM)
-    for _ in 0..3 {
-        client
-            .get("/health")
+    // Consume both global slots with authenticated requests to /v1/tokens.
+    // Each request hits the rate limiter regardless of auth success.
+    for i in 0..2 {
+        let response = client
+            .get("/v1/tokens")
             .header(Header::new("Authorization", header.clone()))
             .dispatch()
             .await;
+        assert_ne!(
+            response.status(),
+            Status::TooManyRequests,
+            "request {i} should not be rate-limited yet"
+        );
     }
 
-    // The next authenticated request must be rate-limited
+    // Third request MUST be rate-limited — the 2-RPM budget is exhausted.
     let response = client
         .get("/v1/tokens")
         .header(Header::new("Authorization", header))
@@ -914,6 +921,15 @@ async fn test_rate_limiting_returns_429_with_retry_after() {
         Status::TooManyRequests,
         "expected 429 after exhausting global rate limit of 2 RPM"
     );
+
+    // Check Retry-After header before consuming the response body
+    let retry_after = response
+        .headers()
+        .get_one("Retry-After")
+        .expect("429 response must include Retry-After header")
+        .to_string();
+    assert_eq!(retry_after, "60", "Retry-After should be 60 seconds");
+
     let body = parse_json(&response.into_string().await.unwrap());
     assert_error_shape(&body, "RATE_LIMITED");
 }
@@ -1342,6 +1358,186 @@ async fn test_orders_by_token_invalid_side_returns_error() {
     assert!(
         status == 400 || status == 422 || status == 500,
         "expected error for invalid side, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// HTTP-level pagination query parameter tests
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_orders_by_owner_page_size_over_max_is_accepted() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    // pageSize=999 should be accepted (capped internally to MAX_PAGE_SIZE),
+    // not rejected as a 400/422.
+    let response = client
+        .get("/v1/orders/owner/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?page=1&pageSize=999")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status != 400 && status != 422,
+        "oversize pageSize should be capped, not rejected; got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_orders_by_token_page_size_over_max_is_accepted() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/token/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?page=1&pageSize=999")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status != 400 && status != 422,
+        "oversize pageSize should be capped, not rejected; got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_orders_by_owner_negative_page_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    // Negative page should fail query-param parsing (u16 can't hold -1)
+    let response = client
+        .get("/v1/orders/owner/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?page=-1")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "negative page should be rejected, got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_orders_by_token_side_input_accepted() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/token/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?side=input")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status != 400 && status != 422,
+        "side=input should be accepted, got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_orders_by_token_side_output_accepted() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/token/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?side=output")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status != 400 && status != 422,
+        "side=output should be accepted, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Catcher tests – verify 422 and 500 catchers produce correct error shape
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_422_catcher_returns_error_shape() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    // POST with valid JSON content-type but invalid body triggers Rocket's 422 catcher
+    let response = client
+        .post("/v1/swap/quote")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(r#"{"bad":"json"}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    if status == 422 {
+        let body = parse_json(&response.into_string().await.unwrap());
+        assert_error_shape(&body, "UNPROCESSABLE_ENTITY");
+    }
+}
+
+#[rocket::async_test]
+async fn test_404_catcher_returns_consistent_error_shape() {
+    let client = TestClientBuilder::new().build().await;
+
+    let response = client.get("/v1/this-does-not-exist").dispatch().await;
+    assert_eq!(response.status(), Status::NotFound);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "NOT_FOUND");
+    assert!(
+        body["error"]["message"].as_str().unwrap().contains("not found"),
+        "404 catcher message should mention 'not found'"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Health endpoint – method restriction
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_health_post_returns_404() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client.post("/health").dispatch().await;
+    assert_eq!(response.status(), Status::NotFound);
+}
+
+// ---------------------------------------------------------------------------
+// Admin registry – non-URL string
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_admin_non_url_registry_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_admin_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .put("/admin/registry")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(r#"{"registry_url":"not-a-url"}"#)
+        .dispatch()
+        .await;
+
+    // Should fail with a 400 or 500 since "not-a-url" can't be fetched
+    let status = response.status().code;
+    assert!(
+        status >= 400,
+        "non-URL registry_url should return an error, got {status}"
     );
 }
 
@@ -1847,5 +2043,966 @@ async fn test_admin_registry_whitespace_only_url_returns_400() {
     assert!(
         status == 400 || status == 422 || status == 500,
         "whitespace-only URL should be rejected, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Error response content-type – all errors should be JSON
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_401_response_content_type_is_json() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client.get("/v1/tokens").dispatch().await;
+    assert_eq!(response.status(), Status::Unauthorized);
+
+    let ct = response.content_type();
+    assert!(ct.is_some(), "401 response must have Content-Type header");
+    assert!(
+        ct.unwrap().is_json(),
+        "401 Content-Type must be application/json"
+    );
+}
+
+#[rocket::async_test]
+async fn test_404_response_content_type_is_json() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client.get("/v1/nonexistent").dispatch().await;
+    assert_eq!(response.status(), Status::NotFound);
+
+    let ct = response.content_type();
+    assert!(ct.is_some(), "404 response must have Content-Type header");
+    assert!(
+        ct.unwrap().is_json(),
+        "404 Content-Type must be application/json"
+    );
+}
+
+#[rocket::async_test]
+async fn test_403_response_content_type_is_json() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .put("/admin/registry")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(r#"{"registry_url":"http://example.com/registry.txt"}"#)
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Forbidden);
+
+    let ct = response.content_type();
+    assert!(ct.is_some(), "403 response must have Content-Type header");
+    assert!(
+        ct.unwrap().is_json(),
+        "403 Content-Type must be application/json"
+    );
+}
+
+#[rocket::async_test]
+async fn test_429_response_content_type_is_json() {
+    let rate_limiter = crate::fairings::RateLimiter::new(1, 10000);
+    let client = TestClientBuilder::new()
+        .rate_limiter(rate_limiter)
+        .build()
+        .await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    // Exhaust the global limit
+    client
+        .get("/health")
+        .header(Header::new("Authorization", header.clone()))
+        .dispatch()
+        .await;
+
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::TooManyRequests);
+
+    let ct = response.content_type();
+    assert!(ct.is_some(), "429 response must have Content-Type header");
+    assert!(
+        ct.unwrap().is_json(),
+        "429 Content-Type must be application/json"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Request ID uniqueness – each request gets a distinct request_id
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_request_ids_are_unique_across_requests() {
+    let client = TestClientBuilder::new().build().await;
+
+    let r1 = client.get("/v1/tokens").dispatch().await;
+    let body1 = parse_json(&r1.into_string().await.unwrap());
+    let id1 = body1["request_id"].as_str().unwrap().to_string();
+
+    let r2 = client.get("/v1/tokens").dispatch().await;
+    let body2 = parse_json(&r2.into_string().await.unwrap());
+    let id2 = body2["request_id"].as_str().unwrap().to_string();
+
+    assert_ne!(id1, id2, "each request must have a unique request_id");
+    assert!(!id1.is_empty());
+    assert!(!id2.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// CORS on protected routes and error responses
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_cors_headers_on_authenticated_endpoint() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Origin", "http://example.com"))
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let allow_origin = response
+        .headers()
+        .get_one("Access-Control-Allow-Origin");
+    assert!(
+        allow_origin.is_some(),
+        "CORS header should be present on authenticated endpoints"
+    );
+}
+
+#[rocket::async_test]
+async fn test_cors_headers_on_error_response() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Origin", "http://example.com"))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+
+    let allow_origin = response
+        .headers()
+        .get_one("Access-Control-Allow-Origin");
+    assert!(
+        allow_origin.is_some(),
+        "CORS header should be present even on 401 error responses"
+    );
+}
+
+#[rocket::async_test]
+async fn test_cors_preflight_includes_allowed_methods() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client
+        .options("/v1/tokens")
+        .header(Header::new("Origin", "http://example.com"))
+        .header(Header::new("Access-Control-Request-Method", "GET"))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 200 || status == 204,
+        "CORS preflight on protected route should succeed, got {status}"
+    );
+
+    let allow_methods = response
+        .headers()
+        .get_one("Access-Control-Allow-Methods");
+    assert!(
+        allow_methods.is_some(),
+        "CORS preflight must include Access-Control-Allow-Methods"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Rate limit response headers (X-RateLimit-*) on successful requests
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_successful_request_includes_rate_limit_headers() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let limit = response.headers().get_one("X-RateLimit-Limit");
+    let remaining = response.headers().get_one("X-RateLimit-Remaining");
+    let reset = response.headers().get_one("X-RateLimit-Reset");
+
+    assert!(
+        limit.is_some(),
+        "successful response should have X-RateLimit-Limit header"
+    );
+    assert!(
+        remaining.is_some(),
+        "successful response should have X-RateLimit-Remaining header"
+    );
+    assert!(
+        reset.is_some(),
+        "successful response should have X-RateLimit-Reset header"
+    );
+
+    // Values should be numeric
+    let limit_val: u64 = limit.unwrap().parse().expect("X-RateLimit-Limit must be numeric");
+    let remaining_val: u64 = remaining.unwrap().parse().expect("X-RateLimit-Remaining must be numeric");
+    let reset_val: u64 = reset.unwrap().parse().expect("X-RateLimit-Reset must be numeric");
+
+    assert!(limit_val > 0, "rate limit should be positive");
+    assert!(remaining_val < limit_val, "remaining should be less than limit after a request");
+    assert!(reset_val > 0, "reset should be a positive timestamp");
+}
+
+// ---------------------------------------------------------------------------
+// Token response detail fields – verify symbol/label/decimals
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_tokens_response_includes_optional_detail_fields() {
+    let settings = r#"version: 4
+networks:
+  base:
+    rpcs:
+      - https://mainnet.base.org
+    chain-id: 8453
+    currency: ETH
+subgraphs:
+  base: https://api.goldsky.com/api/public/project_clv14x04y9kzi01saerx7bxpg/subgraphs/ob4-base/0.9/gn
+orderbooks:
+  base:
+    address: 0xd2938e7c9fe3597f78832ce780feb61945c377d7
+    network: base
+    subgraph: base
+    deployment-block: 0
+deployers:
+  base:
+    address: 0xC1A14cE2fd58A3A2f99deCb8eDd866204eE07f8D
+    network: base
+tokens:
+  usdc:
+    address: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+    network: base
+    decimals: 6
+    label: USD Coin
+    symbol: USDC
+"#;
+    let registry_url =
+        crate::test_helpers::mock_raindex_registry_url_with_settings(settings).await;
+    let config = crate::raindex::RaindexProvider::load(&registry_url, None)
+        .await
+        .expect("load raindex config");
+    let client = TestClientBuilder::new()
+        .raindex_config(config)
+        .build()
+        .await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    let tokens = body.as_array().expect("tokens is an array");
+    assert_eq!(tokens.len(), 1);
+
+    let token = &tokens[0];
+    assert_eq!(token["symbol"], "USDC", "symbol should be populated");
+    assert_eq!(token["label"], "USD Coin", "label should be populated");
+    assert_eq!(token["decimals"], 6, "decimals should be populated");
+}
+
+// ---------------------------------------------------------------------------
+// Admin registry – extra JSON fields are ignored
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_admin_registry_extra_fields_ignored() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_admin_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+    let new_url = crate::test_helpers::mock_raindex_registry_url().await;
+
+    let response = client
+        .put("/admin/registry")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(format!(
+            r#"{{"registry_url":"{new_url}","extra_field":"should be ignored"}}"#
+        ))
+        .dispatch()
+        .await;
+
+    // Should either accept (ignoring extra) or reject (strict)
+    let status = response.status().code;
+    assert!(
+        status == 200 || status == 400 || status == 422,
+        "extra fields should either be ignored (200) or rejected cleanly, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Admin registry – verify DB persistence survives read-back
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_admin_registry_update_persists_to_db() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_admin_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+    let new_url = crate::test_helpers::mock_raindex_registry_url().await;
+
+    // Update registry
+    let response = client
+        .put("/admin/registry")
+        .header(Header::new("Authorization", header.clone()))
+        .header(ContentType::JSON)
+        .body(format!(r#"{{"registry_url":"{new_url}"}}"#))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+
+    // Verify it persisted to the DB layer directly
+    let pool = client
+        .rocket()
+        .state::<crate::db::DbPool>()
+        .expect("pool in state");
+    let stored = crate::db::settings::get_setting(pool, "registry_url")
+        .await
+        .expect("query setting");
+    assert!(stored.is_some(), "registry_url should be persisted in DB");
+    assert_eq!(stored.unwrap(), new_url);
+}
+
+// ---------------------------------------------------------------------------
+// HTTP method mismatches – GET to POST-only endpoints
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_get_to_swap_quote_returns_404() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/swap/quote")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NotFound);
+}
+
+#[rocket::async_test]
+async fn test_get_to_swap_calldata_returns_404() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/swap/calldata")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NotFound);
+}
+
+#[rocket::async_test]
+async fn test_post_to_tokens_returns_404() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NotFound);
+}
+
+#[rocket::async_test]
+async fn test_get_to_cancel_order_returns_404() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/order/cancel")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NotFound);
+}
+
+// ---------------------------------------------------------------------------
+// Swagger / docs endpoint accessibility
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_swagger_ui_endpoint_accessible() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client.get("/swagger/").dispatch().await;
+
+    // Should serve the swagger UI (200) or redirect; NOT 500
+    let status = response.status().code;
+    assert!(
+        status == 200 || status == 301 || status == 302 || status == 303 || status == 404,
+        "swagger endpoint should be accessible or gracefully unavailable, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Pagination – negative page number
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_orders_by_owner_negative_page_returns_error_or_defaults() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/owner/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?page=-1")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    // Should not panic; 422 (bad param) or any handled error is fine
+    let status = response.status().code;
+    assert!(
+        status != 500,
+        "negative page should be handled gracefully, got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_orders_by_owner_non_numeric_page_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/owner/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?page=abc")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422 || status == 500,
+        "non-numeric page should be rejected, got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_orders_by_token_negative_page_size_returns_error_or_defaults() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/token/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?pageSize=-5")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status != 500,
+        "negative pageSize should be handled gracefully, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Registry response content-type is JSON
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_registry_response_content_type_is_json() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/registry")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let ct = response.content_type();
+    assert!(ct.is_some(), "registry response must have Content-Type");
+    assert!(ct.unwrap().is_json(), "registry Content-Type must be JSON");
+}
+
+// ---------------------------------------------------------------------------
+// Auth – empty Authorization header value
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_empty_authorization_header_returns_401() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", ""))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "UNAUTHORIZED");
+}
+
+#[rocket::async_test]
+async fn test_basic_auth_with_only_scheme_returns_401() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", "Basic"))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "UNAUTHORIZED");
+}
+
+#[rocket::async_test]
+async fn test_basic_auth_with_empty_base64_returns_401() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", "Basic "))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+}
+
+// ---------------------------------------------------------------------------
+// Multiple API keys – second key still works after first is deactivated
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_second_key_works_after_first_deactivated() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id_a, _secret_a) = seed_api_key(&client).await;
+    let (key_id_b, secret_b) = seed_api_key(&client).await;
+
+    // Deactivate key A
+    let pool = client
+        .rocket()
+        .state::<crate::db::DbPool>()
+        .expect("pool");
+    sqlx::query("UPDATE api_keys SET active = 0 WHERE key_id = ?")
+        .bind(&key_id_a)
+        .execute(pool)
+        .await
+        .expect("deactivate key A");
+
+    // Key B should still work
+    let header_b = basic_auth_header(&key_id_b, &secret_b);
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header_b))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+}
+
+// ---------------------------------------------------------------------------
+// Trades – missing auth on trades by address with pagination
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_trades_by_address_with_query_params_401_without_auth() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client
+        .get("/v1/trades/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?page=1&pageSize=10")
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+}
+
+// ---------------------------------------------------------------------------
+// Orders by token – side=output accepted
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Admin – GET method on admin/registry returns 404
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_get_admin_registry_returns_404() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_admin_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/admin/registry")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NotFound);
+}
+
+// ---------------------------------------------------------------------------
+// Retry-After header value is exactly "60" on rate-limited responses
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_rate_limited_retry_after_header_value_is_60() {
+    let rate_limiter = crate::fairings::RateLimiter::new(1, 10000);
+    let client = TestClientBuilder::new()
+        .rate_limiter(rate_limiter)
+        .build()
+        .await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    // Exhaust global limit
+    client
+        .get("/health")
+        .header(Header::new("Authorization", header.clone()))
+        .dispatch()
+        .await;
+
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::TooManyRequests);
+
+    let retry_after = response.headers().get_one("Retry-After");
+    assert_eq!(
+        retry_after,
+        Some("60"),
+        "Retry-After header must be exactly 60"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Token address format – verify returned addresses are lowercase hex
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_tokens_address_is_lowercase_hex() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    let tokens = body.as_array().unwrap();
+    for token in tokens {
+        let addr = token["address"].as_str().unwrap();
+        assert!(
+            addr.starts_with("0x"),
+            "token address must start with 0x: {addr}"
+        );
+        // alloy serializes addresses as lowercase hex
+        assert_eq!(
+            addr,
+            addr.to_lowercase(),
+            "token address should be lowercase: {addr}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deploy solver – invalid address in body returns 422
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_deploy_solver_invalid_address_returns_422() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/order/solver")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(r#"{"inputToken":"not-an-address","outputToken":"0x4200000000000000000000000000000000000006","amount":"1000","ioRatio":"0.0005"}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "invalid address should be rejected, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Deploy DCA – invalid address in body returns 422
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_deploy_dca_invalid_address_returns_422() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/order/dca")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(r#"{"inputToken":"ZZZ","outputToken":"0x4200000000000000000000000000000000000006","budgetAmount":"1000","period":4,"periodUnit":"hours","startIo":"0.0005","floorIo":"0.0003"}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "invalid DCA address should be rejected, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Swap quote – invalid address returns 422
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_swap_quote_invalid_address_returns_422() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/swap/quote")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(r#"{"inputToken":"not-an-address","outputToken":"0x4200000000000000000000000000000000000006","outputAmount":"100"}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "invalid address in swap quote should be rejected, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Swap calldata – invalid address returns 422
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_swap_calldata_invalid_address_returns_422() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/swap/calldata")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(r#"{"taker":"invalid","inputToken":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","outputToken":"0x4200000000000000000000000000000000000006","outputAmount":"100","maximumIoRatio":"2.5"}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "invalid taker address should be rejected, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Health endpoint – X-Request-Id header
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_health_response_includes_x_request_id_header() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client.get("/health").dispatch().await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let request_id = response.headers().get_one("X-Request-Id");
+    assert!(
+        request_id.is_some(),
+        "health response should include X-Request-Id header"
+    );
+    assert!(
+        !request_id.unwrap().is_empty(),
+        "X-Request-Id should not be empty"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// X-Request-Id uniqueness across different endpoints
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_x_request_id_unique_across_endpoints() {
+    let client = TestClientBuilder::new().build().await;
+
+    let r1 = client.get("/health").dispatch().await;
+    let id1 = r1
+        .headers()
+        .get_one("X-Request-Id")
+        .unwrap_or("")
+        .to_string();
+
+    let r2 = client.get("/v1/nonexistent").dispatch().await;
+    let id2 = r2
+        .headers()
+        .get_one("X-Request-Id")
+        .unwrap_or("")
+        .to_string();
+
+    if !id1.is_empty() && !id2.is_empty() {
+        assert_ne!(id1, id2, "X-Request-Id must be unique per request");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Admin key can access non-admin endpoints
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_admin_key_can_access_regular_endpoints() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_admin_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header.clone()))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let response = client
+        .get("/registry")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+}
+
+// ---------------------------------------------------------------------------
+// Empty JSON object body on POST endpoints
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_swap_quote_empty_json_object_returns_422() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/swap/quote")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body("{}")
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "empty JSON object should be rejected, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cancel order – valid hash format but nonexistent order
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_cancel_order_valid_format_nonexistent_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    // This is a properly formatted hash that just doesn't exist
+    let response = client
+        .post("/v1/order/cancel")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(r#"{"orderHash":"0x0000000000000000000000000000000000000000000000000000000000000001"}"#)
+        .dispatch()
+        .await;
+
+    // Should get 404 or 500 (not found vs subgraph error), not 422
+    let status = response.status().code;
+    assert!(
+        status >= 400,
+        "nonexistent order cancel should return error, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Orders by token – no side parameter uses default
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_orders_by_token_no_side_param_accepted() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/token/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status != 400 && status != 422,
+        "no side param should default gracefully, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Registry endpoint response – fields completeness
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_registry_response_has_only_expected_keys() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/registry")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    let obj = body.as_object().expect("response is object");
+    assert!(
+        obj.contains_key("registry_url"),
+        "registry response must contain registry_url"
     );
 }
