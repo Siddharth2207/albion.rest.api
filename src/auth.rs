@@ -235,4 +235,25 @@ mod tests {
             .verify_password(b"wrong-secret", &parsed)
             .is_err());
     }
+
+    #[test]
+    fn test_empty_secret_hashes_without_panic() {
+        let hash = hash_secret("").expect("hash empty secret");
+        let parsed = PasswordHash::new(&hash).expect("parse");
+        assert!(Argon2::default()
+            .verify_password(b"", &parsed)
+            .is_ok());
+    }
+
+    #[test]
+    fn test_different_salts_produce_different_hashes() {
+        let hash1 = hash_secret("same-secret").expect("hash1");
+        let hash2 = hash_secret("same-secret").expect("hash2");
+        assert_ne!(hash1, hash2, "different salts should produce different hashes");
+        // But both should verify correctly
+        let parsed1 = PasswordHash::new(&hash1).expect("parse1");
+        let parsed2 = PasswordHash::new(&hash2).expect("parse2");
+        assert!(Argon2::default().verify_password(b"same-secret", &parsed1).is_ok());
+        assert!(Argon2::default().verify_password(b"same-secret", &parsed2).is_ok());
+    }
 }

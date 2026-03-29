@@ -182,6 +182,46 @@ mod tests {
     }
 
     #[rocket::async_test]
+    async fn test_cancel_order_shared_vaults_zero_balances() {
+        let ds = MockOrderDataSource {
+            orders: Ok(vec![mock_order_with_shared_vaults()]),
+            trades: Ok(vec![]),
+            quotes: Ok(vec![]),
+            calldata: Ok(mock_calldata()),
+        };
+        let hash = "0x000000000000000000000000000000000000000000000000000000000000beef"
+            .parse()
+            .unwrap();
+        let result = process_cancel_order(&ds, hash).await.unwrap();
+
+        assert_eq!(result.transactions.len(), 1);
+        // All vault balances are zero in the shared vault fixture, so nothing to withdraw
+        assert_eq!(
+            result.summary.vaults_to_withdraw, 0,
+            "zero-balance shared vaults should have nothing to withdraw"
+        );
+        assert!(
+            result.summary.tokens_returned.is_empty(),
+            "no tokens to return from zero-balance vaults"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn test_cancel_order_query_failure() {
+        let ds = MockOrderDataSource {
+            orders: Err(ApiError::Internal("query failed".into())),
+            trades: Ok(vec![]),
+            quotes: Ok(vec![]),
+            calldata: Ok(mock_calldata()),
+        };
+        let result = process_cancel_order(&ds, test_hash()).await;
+        assert!(
+            matches!(result, Err(ApiError::Internal(_))),
+            "order query failure should propagate as Internal error"
+        );
+    }
+
+    #[rocket::async_test]
     async fn test_cancel_order_401_without_auth() {
         let client = TestClientBuilder::new().build().await;
         let response = client

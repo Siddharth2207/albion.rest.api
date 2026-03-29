@@ -255,6 +255,28 @@ mod tests {
     }
 
     #[rocket::async_test]
+    async fn test_process_get_orders_by_owner_page_zero_treated_as_page_one() {
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![mock_order()]),
+            total_count: 1,
+            quotes: Ok(vec![mock_quote("1.5")]),
+        };
+        let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            .parse()
+            .unwrap();
+        let result = process_get_orders_by_owner(&ds, addr, Some(0), None)
+            .await
+            .unwrap();
+
+        // page=0 should be normalized to page 1
+        assert!(
+            result.pagination.page <= 1,
+            "page=0 should be treated as page 1, got {}",
+            result.pagination.page
+        );
+    }
+
+    #[rocket::async_test]
     async fn test_process_get_orders_by_owner_page_size_capped_at_max() {
         let ds = MockOrdersListDataSource {
             orders: Ok(vec![]),

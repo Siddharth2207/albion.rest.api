@@ -113,6 +113,11 @@ mod tests {
         Err(ApiError::Internal("something broke".into()))
     }
 
+    #[get("/forbidden")]
+    fn forbidden() -> Result<(), ApiError> {
+        Err(ApiError::Forbidden("admin only".into()))
+    }
+
     #[get("/rate-limited")]
     fn rate_limited() -> Result<(), ApiError> {
         Err(ApiError::RateLimited("too many requests".into()))
@@ -121,7 +126,7 @@ mod tests {
     fn error_client() -> Client {
         let rocket = rocket::build().mount(
             "/",
-            rocket::routes![bad_request, unauthorized, not_found, internal, rate_limited],
+            rocket::routes![bad_request, unauthorized, not_found, internal, forbidden, rate_limited],
         );
         Client::tracked(rocket).expect("valid rocket instance")
     }
@@ -169,6 +174,27 @@ mod tests {
             500,
             "INTERNAL_ERROR",
             "something broke",
+        );
+    }
+
+    #[test]
+    fn test_forbidden_returns_403() {
+        let client = error_client();
+        assert_error_response(&client, "/forbidden", 403, "FORBIDDEN", "admin only");
+    }
+
+    #[test]
+    fn test_non_rate_limited_errors_have_no_retry_after_header() {
+        let client = error_client();
+        let response = client.get("/bad-request").dispatch();
+        assert!(
+            response.headers().get_one("Retry-After").is_none(),
+            "non-rate-limited errors must not have Retry-After header"
+        );
+        let response = client.get("/internal").dispatch();
+        assert!(
+            response.headers().get_one("Retry-After").is_none(),
+            "non-rate-limited errors must not have Retry-After header"
         );
     }
 

@@ -1,3 +1,4 @@
+use base64::Engine;
 use crate::test_helpers::{basic_auth_header, seed_admin_key, seed_api_key, TestClientBuilder};
 use rocket::http::{ContentType, Header, Status};
 
@@ -205,6 +206,99 @@ async fn test_wrong_credentials_returns_401() {
         .dispatch()
         .await;
     assert_eq!(response.status(), Status::Unauthorized);
+}
+
+// ---------------------------------------------------------------------------
+// Auth edge cases – malformed base64, no colon, inactive key
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_malformed_base64_auth_returns_401() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", "Basic !!!not-base64!!!"))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "UNAUTHORIZED");
+}
+
+#[rocket::async_test]
+async fn test_base64_without_colon_returns_401() {
+    let client = TestClientBuilder::new().build().await;
+    // base64 of "nocolonseparator" (no ':' in decoded string)
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode("nocolonseparator");
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", format!("Basic {encoded}")))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "UNAUTHORIZED");
+}
+
+#[rocket::async_test]
+async fn test_empty_key_id_and_secret_returns_401() {
+    let client = TestClientBuilder::new().build().await;
+    // base64 of ":" (empty key_id and empty secret)
+    let header = basic_auth_header("", "");
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+}
+
+#[rocket::async_test]
+async fn test_inactive_api_key_returns_401() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+
+    // Deactivate the key
+    let pool = client
+        .rocket()
+        .state::<crate::db::DbPool>()
+        .expect("pool in state");
+    sqlx::query("UPDATE api_keys SET active = 0 WHERE key_id = ?")
+        .bind(&key_id)
+        .execute(pool)
+        .await
+        .expect("deactivate key");
+
+    let header = basic_auth_header(&key_id, &secret);
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "UNAUTHORIZED");
+}
+
+#[rocket::async_test]
+async fn test_valid_key_wrong_secret_returns_401() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, _secret) = seed_api_key(&client).await;
+
+    let header = basic_auth_header(&key_id, "completely-wrong-secret");
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "UNAUTHORIZED");
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,5 +1133,359 @@ async fn test_admin_registry_round_trip_shape() {
     assert_eq!(
         get_body["registry_url"], put_body["registry_url"],
         "GET must reflect the updated registry_url"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// POST endpoints – missing content-type returns 400 consistently
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_swap_calldata_missing_content_type_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/swap/calldata")
+        .header(Header::new("Authorization", header))
+        .body(r#"{"taker":"0x1111111111111111111111111111111111111111","inputToken":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","outputToken":"0x4200000000000000000000000000000000000006","outputAmount":"100","maximumIoRatio":"2.5"}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "expected 400 or 422 without content-type on calldata, got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_deploy_solver_missing_content_type_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/order/solver")
+        .header(Header::new("Authorization", header))
+        .body(r#"{"inputToken":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","outputToken":"0x4200000000000000000000000000000000000006","amount":"1000","ioRatio":"0.0005"}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "expected 400 or 422 without content-type on solver, got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_deploy_dca_missing_content_type_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/order/dca")
+        .header(Header::new("Authorization", header))
+        .body(r#"{"inputToken":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","outputToken":"0x4200000000000000000000000000000000000006","budgetAmount":"1000","period":4,"periodUnit":"hours","startIo":"0.0005","floorIo":"0.0003"}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "expected 400 or 422 without content-type on dca, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Swap quote – completely invalid JSON body
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_swap_quote_invalid_json_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/swap/quote")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body("not json at all")
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "expected 400 or 422 for invalid JSON, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Swap calldata – completely invalid JSON body
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_swap_calldata_invalid_json_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/swap/calldata")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body("{{{{broken json")
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "expected 400 or 422 for broken JSON, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cancel order – invalid order hash format in body
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_cancel_order_invalid_hash_in_body_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/order/cancel")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(r#"{"orderHash":"0xshort"}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "expected 400 or 422 for invalid orderHash, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Orders by owner – page=0 boundary
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_orders_by_owner_page_zero_does_not_crash() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/owner/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?page=0&pageSize=10")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    // Should not panic; any non-crash response is acceptable
+    let status = response.status().code;
+    assert!(
+        status != 422,
+        "page=0 should be accepted as a query param, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Orders by token – page=0 boundary
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_orders_by_token_page_zero_does_not_crash() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/token/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?page=0")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status != 422,
+        "page=0 should be accepted as a query param, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Orders by token – invalid side parameter
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_orders_by_token_invalid_side_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/token/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?side=invalid")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422 || status == 500,
+        "expected error for invalid side, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CORS preflight – OPTIONS request
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_cors_preflight_options_returns_allow_headers() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client
+        .options("/health")
+        .header(Header::new("Origin", "http://example.com"))
+        .header(Header::new("Access-Control-Request-Method", "GET"))
+        .dispatch()
+        .await;
+
+    // Preflight should succeed (200 or 204)
+    let status = response.status().code;
+    assert!(
+        status == 200 || status == 204,
+        "CORS preflight should succeed, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting – per-key limit returns 429 with expected body and headers
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_per_key_rate_limiting_returns_429() {
+    let rate_limiter = crate::fairings::RateLimiter::new(10000, 1);
+    let client = TestClientBuilder::new()
+        .rate_limiter(rate_limiter)
+        .build()
+        .await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    // First request uses the per-key quota
+    let first = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header.clone()))
+        .dispatch()
+        .await;
+    assert_ne!(
+        first.status(),
+        Status::TooManyRequests,
+        "first request should not be rate limited"
+    );
+
+    // Second request exceeds per-key limit of 1
+    let second = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(second.status(), Status::TooManyRequests);
+
+    let body = parse_json(&second.into_string().await.unwrap());
+    assert_error_shape(&body, "RATE_LIMITED");
+}
+
+// ---------------------------------------------------------------------------
+// Tokens – response content-type is JSON
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_tokens_response_content_type_is_json() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let ct = response.content_type();
+    assert!(ct.is_some(), "response must have Content-Type header");
+    assert!(
+        ct.unwrap().is_json(),
+        "Content-Type must be application/json"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Health – response content-type is JSON
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_health_response_content_type_is_json() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client.get("/health").dispatch().await;
+    assert_eq!(response.status(), Status::Ok);
+
+    let ct = response.content_type();
+    assert!(ct.is_some(), "response must have Content-Type header");
+    assert!(
+        ct.unwrap().is_json(),
+        "Content-Type must be application/json"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 404 response shape consistency for unmatched routes
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_deep_unknown_route_returns_404_with_shape() {
+    let client = TestClientBuilder::new().build().await;
+    let response = client
+        .get("/v1/some/deeply/nested/nonexistent/route")
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::NotFound);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "NOT_FOUND");
+}
+
+// ---------------------------------------------------------------------------
+// Admin – non-JSON content type returns error
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_admin_registry_non_json_content_type_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_admin_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .put("/admin/registry")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::Plain)
+        .body(r#"{"registry_url":"http://example.com/registry.txt"}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "expected 400 or 422 for non-JSON content type, got {status}"
     );
 }

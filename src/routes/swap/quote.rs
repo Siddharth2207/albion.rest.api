@@ -245,6 +245,88 @@ mod tests {
     }
 
     #[rocket::async_test]
+    async fn test_process_swap_quote_zero_output_amount() {
+        let ds = MockSwapDataSource {
+            orders: Ok(vec![mock_order()]),
+            candidates: vec![mock_candidate("1000", "1.5")],
+            calldata_result: Err(ApiError::Internal("unused".into())),
+        };
+        // Zero is parseable by Float but the simulation should handle it
+        let result = process_swap_quote(&ds, quote_request("0")).await;
+        // Either succeeds with zeros or returns an error - both are acceptable;
+        // the key thing is it doesn't panic.
+        match result {
+            Ok(r) => assert_eq!(r.estimated_output, "0"),
+            Err(_) => {} // Any error is fine for zero amount
+        }
+    }
+
+    #[rocket::async_test]
+    async fn test_process_swap_quote_same_input_output_token() {
+        let ds = MockSwapDataSource {
+            orders: Ok(vec![]),
+            candidates: vec![],
+            calldata_result: Err(ApiError::Internal("unused".into())),
+        };
+        // Same token for input and output - should return no liquidity
+        let req = SwapQuoteRequest {
+            input_token: USDC,
+            output_token: USDC,
+            output_amount: "100".to_string(),
+        };
+        let result = process_swap_quote(&ds, req).await;
+        assert!(
+            matches!(result, Err(ApiError::NotFound(_))),
+            "same-token pair should return NotFound"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn test_process_swap_quote_empty_output_amount() {
+        let ds = MockSwapDataSource {
+            orders: Ok(vec![mock_order()]),
+            candidates: vec![mock_candidate("1000", "1.5")],
+            calldata_result: Err(ApiError::Internal("unused".into())),
+        };
+        let result = process_swap_quote(&ds, quote_request("")).await;
+        assert!(
+            matches!(result, Err(ApiError::BadRequest(_))),
+            "empty output_amount should be BadRequest"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn test_process_swap_quote_very_large_output_amount() {
+        let ds = MockSwapDataSource {
+            orders: Ok(vec![mock_order()]),
+            candidates: vec![mock_candidate("1000", "1.5")],
+            calldata_result: Err(ApiError::Internal("unused".into())),
+        };
+        // Very large amount - partial fill expected since max_output is 1000
+        let result = process_swap_quote(&ds, quote_request("999999999999")).await.unwrap();
+        assert_eq!(
+            result.estimated_output, "1000",
+            "should be limited to max available output"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn test_process_swap_quote_response_tokens_match_request() {
+        let ds = MockSwapDataSource {
+            orders: Ok(vec![mock_order()]),
+            candidates: vec![mock_candidate("500", "2")],
+            calldata_result: Err(ApiError::Internal("unused".into())),
+        };
+        let result = process_swap_quote(&ds, quote_request("100")).await.unwrap();
+        assert_eq!(result.input_token, USDC, "input_token must match request");
+        assert_eq!(result.output_token, WETH, "output_token must match request");
+        assert_eq!(
+            result.output_amount, "100",
+            "output_amount must echo the request"
+        );
+    }
+
+    #[rocket::async_test]
     async fn test_swap_quote_401_without_auth() {
         let client = TestClientBuilder::new().build().await;
         let response = client

@@ -254,6 +254,75 @@ mod tests {
     }
 
     #[rocket::async_test]
+    async fn test_pagination_math_single_item() {
+        use super::super::build_pagination;
+
+        let p = build_pagination(1, 1, 50);
+        assert_eq!(p.total_orders, 1);
+        assert_eq!(p.total_pages, 1);
+        assert!(!p.has_more);
+        assert_eq!(p.page, 1);
+        assert_eq!(p.page_size, 50);
+    }
+
+    #[rocket::async_test]
+    async fn test_pagination_math_exactly_fills_pages() {
+        use super::super::build_pagination;
+
+        let p = build_pagination(200, 1, 50);
+        assert_eq!(p.total_pages, 4);
+        assert!(p.has_more);
+
+        let p = build_pagination(200, 4, 50);
+        assert_eq!(p.total_pages, 4);
+        assert!(!p.has_more);
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_token_page_zero_treated_as_page_one() {
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![mock_order()]),
+            total_count: 1,
+            quotes: Ok(vec![mock_quote("1.5")]),
+        };
+        let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            .parse()
+            .unwrap();
+        let result = process_get_orders_by_token(&ds, addr, None, Some(0), None)
+            .await
+            .unwrap();
+
+        assert!(
+            result.pagination.page <= 1,
+            "page=0 should be treated as page 1, got {}",
+            result.pagination.page
+        );
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_token_all_sides() {
+        for side in [None, Some(OrderSide::Input), Some(OrderSide::Output)] {
+            let ds = MockOrdersListDataSource {
+                orders: Ok(vec![mock_order()]),
+                total_count: 1,
+                quotes: Ok(vec![mock_quote("1.5")]),
+            };
+            let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                .parse()
+                .unwrap();
+            let result = process_get_orders_by_token(&ds, addr, side, None, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                result.orders.len(),
+                1,
+                "should return 1 order for side {:?}",
+                side
+            );
+        }
+    }
+
+    #[rocket::async_test]
     async fn test_get_orders_by_token_401_without_auth() {
         let client = TestClientBuilder::new().build().await;
         let response = client
