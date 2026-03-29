@@ -256,8 +256,11 @@ mod tests {
         // Either succeeds with zeros or returns an error - both are acceptable;
         // the key thing is it doesn't panic.
         match result {
-            Ok(r) => assert_eq!(r.estimated_output, "0"),
-            Err(_) => {} // Any error is fine for zero amount
+            Ok(r) => assert_eq!(r.estimated_output, "0", "zero-amount quote should estimate zero output"),
+            Err(e) => assert!(
+                !matches!(e, ApiError::Internal(_)),
+                "zero-amount quote may return a validation error, but not an internal error: {e:?}"
+            ),
         }
     }
 

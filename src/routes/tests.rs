@@ -46,9 +46,9 @@ async fn test_health_returns_200_with_status_ok() {
     let client = TestClientBuilder::new().build().await;
     let response = client.get("/health").dispatch().await;
 
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), Status::Ok, "health endpoint should return 200");
     let body = parse_json(&response.into_string().await.unwrap());
-    assert_eq!(body["status"], "ok");
+    assert_eq!(body["status"], "ok", "health response body must contain status: ok");
 }
 
 #[rocket::async_test]
@@ -397,7 +397,7 @@ async fn test_admin_update_registry_returns_updated_url() {
     assert_eq!(response.status(), Status::Ok);
 
     let body = parse_json(&response.into_string().await.unwrap());
-    assert_eq!(body["registry_url"], new_url);
+    assert_eq!(body["registry_url"], new_url, "PUT response must echo the new registry_url");
 }
 
 #[rocket::async_test]
@@ -432,11 +432,11 @@ async fn test_admin_missing_body_returns_400() {
         .dispatch()
         .await;
 
-    // Rocket returns 400 or 422 for missing/malformed body
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 for missing body, got {status}"
+    // Rocket returns 422 when Json guard fails to deserialize body
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "missing body with JSON content-type should return 422"
     );
 }
 
@@ -458,10 +458,10 @@ async fn test_swap_quote_malformed_body_returns_422() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 for malformed body, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "malformed JSON body should return 422"
     );
 
     let body = parse_json(&response.into_string().await.unwrap());
@@ -484,10 +484,10 @@ async fn test_swap_quote_missing_content_type_returns_400() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 without content-type, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::BadRequest,
+        "missing Content-Type should return 400"
     );
 }
 
@@ -509,10 +509,10 @@ async fn test_swap_calldata_malformed_body_returns_422() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 for malformed body, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "malformed calldata body should return 422"
     );
 }
 
@@ -576,10 +576,10 @@ async fn test_cancel_order_malformed_body_returns_422() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 for malformed cancel body, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "malformed cancel body should return 422"
     );
 }
 
@@ -596,10 +596,10 @@ async fn test_cancel_order_empty_body_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 for empty cancel body, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "empty cancel body with JSON content-type should return 422"
     );
 }
 
@@ -724,10 +724,10 @@ async fn test_deploy_solver_malformed_body_returns_422() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 for malformed solver body, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "malformed solver body should return 422"
     );
 }
 
@@ -764,10 +764,10 @@ async fn test_deploy_dca_malformed_body_returns_422() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 for malformed dca body, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "malformed DCA body should return 422"
     );
 }
 
@@ -1012,9 +1012,9 @@ async fn test_shared_client_succeeds_with_valid_registry() {
 
     let response = client.get("/__test/shared-client").dispatch().await;
 
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), Status::Ok, "shared client route should return 200");
     let body = response.into_string().await.expect("response body");
-    assert_eq!(body, "ok");
+    assert_eq!(body, "ok", "shared client should return 'ok' for valid config");
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,10 +1034,10 @@ async fn test_cancel_order_missing_content_type_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 without content-type, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::BadRequest,
+        "missing Content-Type on cancel should return 400"
     );
 }
 
@@ -1097,11 +1097,11 @@ tokens:
         .header(Header::new("Authorization", header))
         .dispatch()
         .await;
-    assert_eq!(response.status(), Status::Ok);
+    assert_eq!(response.status(), Status::Ok, "GET /v1/tokens should return 200 with valid config");
 
     let body = parse_json(&response.into_string().await.unwrap());
     let tokens = body.as_array().expect("tokens is an array");
-    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens.len(), 2, "settings define 2 tokens (usdc, weth); response should contain exactly 2");
 
     // Each token should have at minimum address and network
     for token in tokens {
@@ -1129,7 +1129,7 @@ async fn test_admin_registry_round_trip_shape() {
         .body(format!(r#"{{"registry_url":"{new_url}"}}"#))
         .dispatch()
         .await;
-    assert_eq!(put_response.status(), Status::Ok);
+    assert_eq!(put_response.status(), Status::Ok, "PUT /admin/registry should return 200");
 
     let put_body = parse_json(&put_response.into_string().await.unwrap());
     assert!(
@@ -1143,7 +1143,7 @@ async fn test_admin_registry_round_trip_shape() {
         .header(Header::new("Authorization", header))
         .dispatch()
         .await;
-    assert_eq!(get_response.status(), Status::Ok);
+    assert_eq!(get_response.status(), Status::Ok, "GET /registry should return 200");
 
     let get_body = parse_json(&get_response.into_string().await.unwrap());
     assert_eq!(
@@ -1169,10 +1169,10 @@ async fn test_swap_calldata_missing_content_type_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 without content-type on calldata, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::BadRequest,
+        "missing Content-Type on calldata should return 400"
     );
 }
 
@@ -1189,10 +1189,10 @@ async fn test_deploy_solver_missing_content_type_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 without content-type on solver, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::BadRequest,
+        "missing Content-Type on solver should return 400"
     );
 }
 
@@ -1209,10 +1209,10 @@ async fn test_deploy_dca_missing_content_type_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 without content-type on dca, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::BadRequest,
+        "missing Content-Type on DCA should return 400"
     );
 }
 
@@ -1234,10 +1234,10 @@ async fn test_swap_quote_invalid_json_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 for invalid JSON, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "invalid JSON with JSON Content-Type should return 422"
     );
 }
 
@@ -1259,10 +1259,10 @@ async fn test_swap_calldata_invalid_json_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 for broken JSON, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "broken JSON with JSON Content-Type should return 422"
     );
 }
 
@@ -1284,10 +1284,10 @@ async fn test_cancel_order_invalid_hash_in_body_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 for invalid orderHash, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "invalid orderHash format should fail deserialization and return 422"
     );
 }
 
@@ -1482,11 +1482,13 @@ async fn test_422_catcher_returns_error_shape() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    if status == 422 {
-        let body = parse_json(&response.into_string().await.unwrap());
-        assert_error_shape(&body, "UNPROCESSABLE_ENTITY");
-    }
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "invalid JSON body with JSON Content-Type should trigger 422 catcher"
+    );
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "UNPROCESSABLE_ENTITY");
 }
 
 #[rocket::async_test]
@@ -1595,7 +1597,7 @@ async fn test_per_key_rate_limiting_returns_429() {
         .header(Header::new("Authorization", header))
         .dispatch()
         .await;
-    assert_eq!(second.status(), Status::TooManyRequests);
+    assert_eq!(second.status(), Status::TooManyRequests, "second request should hit per-key rate limit of 1");
 
     let body = parse_json(&second.into_string().await.unwrap());
     assert_error_shape(&body, "RATE_LIMITED");
@@ -1679,10 +1681,10 @@ async fn test_admin_registry_non_json_content_type_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "expected 400 or 422 for non-JSON content type, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::BadRequest,
+        "non-JSON Content-Type should return 400"
     );
 }
 
@@ -1755,10 +1757,10 @@ async fn test_sql_injection_in_cancel_body_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "SQL-injection-style cancel hash should be rejected, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "SQL-injection-style cancel hash should fail FixedBytes deserialization → 422"
     );
 }
 
@@ -1857,8 +1859,12 @@ async fn test_orders_by_owner_large_page_number_does_not_crash() {
         .dispatch()
         .await;
 
-    // Should not panic; any non-crash response is acceptable
-    let _status = response.status().code;
+    // Should not panic or return 500; the server must handle large page gracefully
+    let status = response.status().code;
+    assert!(
+        status != 500,
+        "large page number should not cause internal server error, got {status}"
+    );
 }
 
 #[rocket::async_test]
@@ -1878,10 +1884,10 @@ async fn test_cancel_order_extremely_long_hash_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "extremely long hash should be rejected, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "extremely long hash should fail FixedBytes deserialization → 422"
     );
 }
 
@@ -2018,10 +2024,10 @@ async fn test_swap_quote_empty_string_body_returns_error() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "empty body should be rejected, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "empty body with JSON Content-Type should return 422"
     );
 }
 
@@ -2390,7 +2396,7 @@ async fn test_admin_registry_update_persists_to_db() {
         .await
         .expect("query setting");
     assert!(stored.is_some(), "registry_url should be persisted in DB");
-    assert_eq!(stored.unwrap(), new_url);
+    assert_eq!(stored.unwrap(), new_url, "DB should store the exact URL that was PUT");
 }
 
 // ---------------------------------------------------------------------------
@@ -2752,10 +2758,10 @@ async fn test_deploy_solver_invalid_address_returns_422() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "invalid address should be rejected, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "invalid Address should fail deserialization → 422"
     );
 }
 
@@ -2777,10 +2783,10 @@ async fn test_deploy_dca_invalid_address_returns_422() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "invalid DCA address should be rejected, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "invalid DCA Address should fail deserialization → 422"
     );
 }
 
@@ -2802,10 +2808,10 @@ async fn test_swap_quote_invalid_address_returns_422() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "invalid address in swap quote should be rejected, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "invalid Address in swap quote should fail deserialization → 422"
     );
 }
 
@@ -2827,10 +2833,10 @@ async fn test_swap_calldata_invalid_address_returns_422() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "invalid taker address should be rejected, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "invalid taker Address should fail deserialization → 422"
     );
 }
 
@@ -2925,10 +2931,10 @@ async fn test_swap_quote_empty_json_object_returns_422() {
         .dispatch()
         .await;
 
-    let status = response.status().code;
-    assert!(
-        status == 400 || status == 422,
-        "empty JSON object should be rejected, got {status}"
+    assert_eq!(
+        response.status(),
+        Status::UnprocessableEntity,
+        "empty JSON object should fail deserialization → 422"
     );
 }
 
