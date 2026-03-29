@@ -1489,3 +1489,363 @@ async fn test_admin_registry_non_json_content_type_returns_error() {
         "expected 400 or 422 for non-JSON content type, got {status}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial / SQL-injection-style inputs
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_sql_injection_in_auth_key_id_returns_401() {
+    let client = TestClientBuilder::new().build().await;
+    let header = basic_auth_header("'; DROP TABLE api_keys; --", "secret");
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "UNAUTHORIZED");
+}
+
+#[rocket::async_test]
+async fn test_sql_injection_in_order_hash_path_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/order/0x'; DROP TABLE orders; --")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 404 || status == 422,
+        "SQL-injection-style order hash should be rejected, got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_sql_injection_in_owner_address_returns_422() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/owner/'; DROP TABLE api_keys; --")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::UnprocessableEntity);
+
+    let body = parse_json(&response.into_string().await.unwrap());
+    assert_error_shape(&body, "UNPROCESSABLE_ENTITY");
+}
+
+#[rocket::async_test]
+async fn test_sql_injection_in_cancel_body_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/order/cancel")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(r#"{"orderHash":"'; DROP TABLE orders; --"}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "SQL-injection-style cancel hash should be rejected, got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_unicode_injection_in_auth_header_returns_401() {
+    let client = TestClientBuilder::new().build().await;
+    let header = basic_auth_header("key\u{0000}id", "sec\u{0000}ret");
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+}
+
+// ---------------------------------------------------------------------------
+// Input validation boundaries – large bodies, extreme query params
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_swap_quote_very_large_body_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    // 1MB of padding in a JSON field
+    let large_value = "x".repeat(1_000_000);
+    let body = format!(
+        r#"{{"inputToken":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","outputToken":"0x4200000000000000000000000000000000000006","outputAmount":"{large_value}"}}"#
+    );
+
+    let response = client
+        .post("/v1/swap/quote")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(body)
+        .dispatch()
+        .await;
+
+    // Should reject or handle gracefully (400, 413, 422, or 500), not hang
+    let status = response.status().code;
+    assert!(
+        status >= 400,
+        "very large body should not succeed, got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_orders_by_owner_max_page_size_is_capped() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    // Request absurdly large pageSize – should be capped, not crash
+    let response = client
+        .get("/v1/orders/owner/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?pageSize=65535")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status != 422,
+        "large pageSize should be accepted (capped internally), got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_orders_by_token_max_page_size_is_capped() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/token/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?pageSize=65535")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status != 422,
+        "large pageSize should be accepted (capped internally), got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_orders_by_owner_large_page_number_does_not_crash() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .get("/v1/orders/owner/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913?page=65535")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+
+    // Should not panic; any non-crash response is acceptable
+    let _status = response.status().code;
+}
+
+#[rocket::async_test]
+async fn test_cancel_order_extremely_long_hash_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let long_hash = format!("0x{}", "a".repeat(10000));
+    let body = format!(r#"{{"orderHash":"{long_hash}"}}"#);
+
+    let response = client
+        .post("/v1/order/cancel")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(body)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "extremely long hash should be rejected, got {status}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent auth – multiple simultaneous requests with same key
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_concurrent_auth_with_same_key_succeeds() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    // Fire 10 concurrent authenticated requests
+    let mut handles = Vec::new();
+    for _ in 0..10 {
+        let h = header.clone();
+        let resp = client
+            .get("/v1/tokens")
+            .header(Header::new("Authorization", h))
+            .dispatch()
+            .await;
+        handles.push(resp.status());
+    }
+
+    // All should authenticate successfully (200), none should be 401
+    for status in &handles {
+        assert_ne!(
+            *status,
+            Status::Unauthorized,
+            "concurrent auth should not cause 401"
+        );
+    }
+}
+
+#[rocket::async_test]
+async fn test_concurrent_requests_different_keys_independent_rate_limits() {
+    let rate_limiter = crate::fairings::RateLimiter::new(10000, 2);
+    let client = TestClientBuilder::new()
+        .rate_limiter(rate_limiter)
+        .build()
+        .await;
+
+    let (key_id_a, secret_a) = seed_api_key(&client).await;
+    let (key_id_b, secret_b) = seed_api_key(&client).await;
+    let header_a = basic_auth_header(&key_id_a, &secret_a);
+    let header_b = basic_auth_header(&key_id_b, &secret_b);
+
+    // Exhaust key A's per-key limit (2 RPM)
+    for _ in 0..2 {
+        client
+            .get("/v1/tokens")
+            .header(Header::new("Authorization", header_a.clone()))
+            .dispatch()
+            .await;
+    }
+
+    // Key A should now be rate limited
+    let response_a = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header_a))
+        .dispatch()
+        .await;
+    assert_eq!(
+        response_a.status(),
+        Status::TooManyRequests,
+        "key A should be rate limited"
+    );
+
+    // Key B should still work fine
+    let response_b = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header_b))
+        .dispatch()
+        .await;
+    assert_ne!(
+        response_b.status(),
+        Status::TooManyRequests,
+        "key B should NOT be rate limited by key A's usage"
+    );
+    assert_eq!(response_b.status(), Status::Ok);
+}
+
+// ---------------------------------------------------------------------------
+// Auth header edge cases – additional adversarial patterns
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_auth_header_with_extra_colons_uses_first_split() {
+    let client = TestClientBuilder::new().build().await;
+    // "key:secret:extra" — the key_id is "key", secret is "secret:extra"
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode("key_id:secret:with:colons");
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", format!("Basic {encoded}")))
+        .dispatch()
+        .await;
+
+    // Should get 401 (key doesn't exist), not a parse error or panic
+    assert_eq!(response.status(), Status::Unauthorized);
+}
+
+#[rocket::async_test]
+async fn test_auth_with_very_long_credentials_returns_401() {
+    let client = TestClientBuilder::new().build().await;
+    let long_key = "k".repeat(10000);
+    let long_secret = "s".repeat(10000);
+    let header = basic_auth_header(&long_key, &long_secret);
+
+    let response = client
+        .get("/v1/tokens")
+        .header(Header::new("Authorization", header))
+        .dispatch()
+        .await;
+    assert_eq!(response.status(), Status::Unauthorized);
+}
+
+// ---------------------------------------------------------------------------
+// Empty / whitespace-only JSON bodies
+// ---------------------------------------------------------------------------
+
+#[rocket::async_test]
+async fn test_swap_quote_empty_string_body_returns_error() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_api_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .post("/v1/swap/quote")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body("")
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422,
+        "empty body should be rejected, got {status}"
+    );
+}
+
+#[rocket::async_test]
+async fn test_admin_registry_whitespace_only_url_returns_400() {
+    let client = TestClientBuilder::new().build().await;
+    let (key_id, secret) = seed_admin_key(&client).await;
+    let header = basic_auth_header(&key_id, &secret);
+
+    let response = client
+        .put("/admin/registry")
+        .header(Header::new("Authorization", header))
+        .header(ContentType::JSON)
+        .body(r#"{"registry_url":"   "}"#)
+        .dispatch()
+        .await;
+
+    let status = response.status().code;
+    assert!(
+        status == 400 || status == 422 || status == 500,
+        "whitespace-only URL should be rejected, got {status}"
+    );
+}

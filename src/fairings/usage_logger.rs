@@ -62,6 +62,28 @@ mod tests {
     use crate::test_helpers::{basic_auth_header, client, seed_api_key, TestClientBuilder};
     use rocket::http::{Header, Status};
 
+    /// Poll the usage_logs table until `expected` rows exist or timeout (2s).
+    /// Replaces brittle `sleep(100ms)` with a retry loop that tolerates CI load.
+    async fn await_usage_log_count(pool: &crate::db::DbPool, expected: i64) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM usage_logs")
+                .fetch_one(pool)
+                .await
+                .expect("query usage_logs count");
+            if row.0 == expected {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "timed out waiting for usage_logs count to reach {expected}, got {}",
+                    row.0
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
     #[rocket::async_test]
     async fn test_authenticated_request_creates_usage_log() {
         let client = client().await;
@@ -74,14 +96,8 @@ mod tests {
             .dispatch()
             .await;
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
         let pool = client.rocket().state::<crate::db::DbPool>().expect("pool");
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM usage_logs")
-            .fetch_one(pool)
-            .await
-            .expect("query");
-        assert_eq!(row.0, 1);
+        await_usage_log_count(pool, 1).await;
 
         let log: (i64, String, String) =
             sqlx::query_as("SELECT api_key_id, method, path FROM usage_logs LIMIT 1")
@@ -107,7 +123,9 @@ mod tests {
         let response = client.get("/health").dispatch().await;
         assert_eq!(response.status(), Status::Ok);
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // No async log task spawned for unauthenticated requests, but give a
+        // brief window so any accidental spawn would be caught.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let pool = client.rocket().state::<crate::db::DbPool>().expect("pool");
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM usage_logs")
@@ -130,7 +148,8 @@ mod tests {
             .await;
         assert_eq!(response.status(), Status::Unauthorized);
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // No async log task spawned for failed auth, brief window to catch bugs.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let pool = client.rocket().state::<crate::db::DbPool>().expect("pool");
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM usage_logs")
@@ -163,14 +182,8 @@ mod tests {
             .await;
         assert_eq!(second.status(), Status::TooManyRequests);
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
         let pool = client.rocket().state::<crate::db::DbPool>().expect("pool");
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM usage_logs")
-            .fetch_one(pool)
-            .await
-            .expect("query");
-        assert_eq!(row.0, 2);
+        await_usage_log_count(pool, 2).await;
 
         let api_key: (i64,) = sqlx::query_as("SELECT id FROM api_keys WHERE key_id = ?")
             .bind(&key_id)
@@ -199,7 +212,8 @@ mod tests {
         let second = client.get("/v1/tokens").dispatch().await;
         assert_eq!(second.status(), Status::TooManyRequests);
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // No auth succeeded so no logs should exist; brief window to catch bugs.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let pool = client.rocket().state::<crate::db::DbPool>().expect("pool");
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM usage_logs")
