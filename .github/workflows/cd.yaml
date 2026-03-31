@@ -39,7 +39,17 @@ jobs:
 
       - name: Resolve host IP
         run: |
-          host_ip=$(nix run .#resolveIp)
+          if [ -n "${{ secrets.DEPLOY_HOST }}" ]; then
+            host_ip="${{ secrets.DEPLOY_HOST }}"
+            echo "Using DEPLOY_HOST secret"
+          else
+            host_ip=$(nix run .#resolveIp)
+            echo "Using resolved host IP from terraform state"
+          fi
+          if ! echo "$host_ip" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+            echo "Resolve host IP failed: invalid IPv4 '$host_ip'" >&2
+            exit 1
+          fi
           echo "::add-mask::$host_ip"
           echo "HOST_IP=$host_ip" >> "$GITHUB_ENV"
 

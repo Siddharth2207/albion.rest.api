@@ -56,9 +56,27 @@ let
   resolveIp = ''
     ${parseIdentity}
     trap 'rm -f ${tfState}' EXIT
-    ${decryptState}
-    host_ip=$(jq -r '.outputs.droplet_ipv4.value' ${tfState})
-    rm -f ${tfState}
+    if [ -f ${tfState}.age ]; then
+      if ! rage -d -i "$identity" ${tfState}.age > ${tfState}; then
+        echo "Failed to decrypt ${tfState}.age with identity $identity" >&2
+        exit 1
+      fi
+    elif [ ! -f ${tfState} ]; then
+      echo "Neither ${tfState}.age nor ${tfState} exists; cannot resolve host IP" >&2
+      exit 1
+    fi
+
+    host_ip=$(jq -r '.outputs.droplet_ipv4.value // empty' ${tfState} 2>/dev/null || true)
+    if [ -z "$host_ip" ]; then
+      outputs=$(jq -r '.outputs | keys | join(",")' ${tfState} 2>/dev/null || echo "<unreadable>")
+      echo "Unable to find outputs.droplet_ipv4.value in terraform state (available outputs: $outputs)" >&2
+      exit 1
+    fi
+
+    if ! echo "$host_ip" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+      echo "Resolved host IP is not valid IPv4: '$host_ip'" >&2
+      exit 1
+    fi
   '';
 
   decryptVars = ''
