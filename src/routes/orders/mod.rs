@@ -10,6 +10,7 @@ use rain_orderbook_common::raindex_client::order_quotes::RaindexOrderQuote;
 use rain_orderbook_common::raindex_client::orders::{GetOrdersFilters, RaindexOrder};
 use rain_orderbook_common::raindex_client::RaindexClient;
 use rocket::Route;
+use std::time::Instant;
 
 pub(crate) const DEFAULT_PAGE_SIZE: u32 = 20;
 pub(crate) const MAX_PAGE_SIZE: u16 = 50;
@@ -41,6 +42,7 @@ impl<'a> OrdersListDataSource for RaindexOrdersListDataSource<'a> {
         page: Option<u16>,
         page_size: Option<u16>,
     ) -> Result<(Vec<RaindexOrder>, u32), ApiError> {
+        let start = Instant::now();
         let result = self
             .client
             .get_orders(None, Some(filters), page, page_size)
@@ -49,6 +51,14 @@ impl<'a> OrdersListDataSource for RaindexOrdersListDataSource<'a> {
                 tracing::error!(error = %e, "failed to query orders");
                 ApiError::Internal("failed to query orders".into())
             })?;
+        tracing::info!(
+            page = page.unwrap_or(1),
+            page_size = page_size.unwrap_or(DEFAULT_PAGE_SIZE as u16),
+            returned_orders = result.orders().len(),
+            total_orders = result.total_count(),
+            duration_ms = start.elapsed().as_millis(),
+            "queried orders list"
+        );
         Ok((result.orders().to_vec(), result.total_count()))
     }
 
@@ -56,10 +66,28 @@ impl<'a> OrdersListDataSource for RaindexOrdersListDataSource<'a> {
         &self,
         order: &RaindexOrder,
     ) -> Result<Vec<RaindexOrderQuote>, ApiError> {
-        order.get_quotes(None, None).await.map_err(|e| {
-            tracing::error!(error = %e, "failed to query order quotes");
-            ApiError::Internal("failed to query order quotes".into())
-        })
+        let start = Instant::now();
+        let order_hash = order.order_hash();
+        match order.get_quotes(None, None).await {
+            Ok(quotes) => {
+                tracing::info!(
+                    ?order_hash,
+                    quote_count = quotes.len(),
+                    duration_ms = start.elapsed().as_millis(),
+                    "queried order quotes"
+                );
+                Ok(quotes)
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    ?order_hash,
+                    duration_ms = start.elapsed().as_millis(),
+                    "failed to query order quotes"
+                );
+                Err(ApiError::Internal("failed to query order quotes".into()))
+            }
+        }
     }
 }
 

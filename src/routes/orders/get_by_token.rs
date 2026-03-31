@@ -13,6 +13,7 @@ use rain_orderbook_common::raindex_client::orders::GetOrdersFilters;
 use rain_orderbook_common::raindex_client::orders::GetOrdersTokenFilter;
 use rocket::serde::json::Json;
 use rocket::State;
+use std::time::Instant;
 use tracing::Instrument;
 
 pub(crate) async fn process_get_orders_by_token(
@@ -22,6 +23,7 @@ pub(crate) async fn process_get_orders_by_token(
     page: Option<u16>,
     page_size: Option<u16>,
 ) -> Result<OrdersListResponse, ApiError> {
+    let total_start = Instant::now();
     let token_filter = match side {
         Some(OrderSide::Input) => GetOrdersTokenFilter {
             inputs: Some(vec![address]),
@@ -47,22 +49,37 @@ pub(crate) async fn process_get_orders_by_token(
     let effective_page_size = page_size
         .unwrap_or(DEFAULT_PAGE_SIZE as u16)
         .min(MAX_PAGE_SIZE);
+
+    let orders_stage_start = Instant::now();
     let (orders, total_count) = ds
         .get_orders_list(filters, Some(page_num), Some(effective_page_size))
         .await?;
+    let orders_stage_duration_ms = orders_stage_start.elapsed().as_millis();
 
+    let quotes_stage_start = Instant::now();
     let quote_futures: Vec<_> = orders.iter().map(|o| ds.get_order_quotes(o)).collect();
     let quote_results = join_all(quote_futures).await;
+    let quotes_stage_duration_ms = quotes_stage_start.elapsed().as_millis();
 
     let mut summaries = Vec::with_capacity(orders.len());
+    let mut quote_success_count: usize = 0;
+    let mut quote_empty_count: usize = 0;
+    let mut quote_error_count: usize = 0;
     for (order, quotes_result) in orders.iter().zip(quote_results) {
         let io_ratio = match quotes_result {
             Ok(quotes) => quotes
                 .first()
                 .and_then(|q| q.data.as_ref())
-                .map(|d| d.formatted_ratio.clone())
-                .unwrap_or_else(|| "-".into()),
+                .map(|d| {
+                    quote_success_count += 1;
+                    d.formatted_ratio.clone()
+                })
+                .unwrap_or_else(|| {
+                    quote_empty_count += 1;
+                    "-".into()
+                }),
             Err(err) => {
+                quote_error_count += 1;
                 tracing::warn!(
                     order_hash = ?order.order_hash(),
                     error = ?err,
@@ -75,6 +92,19 @@ pub(crate) async fn process_get_orders_by_token(
     }
 
     let pagination = build_pagination(total_count, page_num.into(), effective_page_size.into());
+    tracing::info!(
+        page = page_num,
+        page_size = effective_page_size,
+        returned_orders = summaries.len(),
+        total_orders = total_count,
+        quote_success_count,
+        quote_empty_count,
+        quote_error_count,
+        orders_stage_duration_ms,
+        quotes_stage_duration_ms,
+        total_duration_ms = total_start.elapsed().as_millis(),
+        "orders by token request processed"
+    );
     Ok(OrdersListResponse {
         orders: summaries,
         pagination,
@@ -110,15 +140,50 @@ pub async fn get_orders_by_token(
 ) -> Result<Json<OrdersListResponse>, ApiError> {
     async move {
         tracing::info!(address = ?address, params = ?params, "request received");
+        let handler_start = Instant::now();
         let addr = address.0;
         let side = params.side;
         let page = params.page;
         let page_size = params.page_size;
+        let raindex_lock_start = Instant::now();
         let raindex = shared_raindex.read().await;
+        let raindex_lock_wait_duration_ms = raindex_lock_start.elapsed().as_millis();
+        if let Some(path) = raindex.db_path() {
+            let db_stat_start = Instant::now();
+            match std::fs::metadata(&path) {
+                Ok(metadata) => {
+                    tracing::info!(
+                        local_db_path = %path.display(),
+                        local_db_size_bytes = metadata.len(),
+                        local_db_stat_duration_ms = db_stat_start.elapsed().as_millis(),
+                        raindex_lock_wait_duration_ms,
+                        "local raindex db size observed"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        local_db_path = %path.display(),
+                        error = %error,
+                        local_db_stat_duration_ms = db_stat_start.elapsed().as_millis(),
+                        raindex_lock_wait_duration_ms,
+                        "failed to stat local raindex db path"
+                    );
+                }
+            }
+        } else {
+            tracing::info!(
+                raindex_lock_wait_duration_ms,
+                "raindex provider has no local db path configured"
+            );
+        }
         let ds = RaindexOrdersListDataSource {
             client: raindex.client(),
         };
         let response = process_get_orders_by_token(&ds, addr, side, page, page_size).await?;
+        tracing::info!(
+            duration_ms = handler_start.elapsed().as_millis(),
+            "orders by token handler completed"
+        );
         Ok(Json(response))
     }
     .instrument(span.0)
