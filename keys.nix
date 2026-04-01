@@ -1,18 +1,15 @@
 rec {
   keys = {
-    st0x-op =
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPZ56nOYbGDd0ZfbqxeY7AbvaQGQrHnlC80ccpRGpCoj";
+    alastair =
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJArH3PA+bFIon0JkCVQGs9aWr45lnVjiiTLLO9BPItn";
+    github_actions_deploy =
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN8tXytd8vWClKbJ+xSyCFNHlIaR4R4KGOb9IUGaxSlk";
     host =
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK9JhlVsHGlSS3c+RGKFSwXyuFpvUTbnOny9e2AdBQ6G";
-    ci =
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPTd2zKSwHgWegi290EiK5nYp1Wp4+x2fDYqFxbd0WLN";
-    arda =
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAyTREGZCOzMsl7N9dp1saN/t7DCs7YesusVUKApMJ78";
-    sid = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPl3/6RlR6Rvz0ZRyZukzFtt4zUYNz5OVuTsajJl7V3n";
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHD9NJYG8/ofQ1pnj9nsDWwMfMd1zE7MYZke6tj7BFCA";
   };
 
   roles = with keys; {
-    infra = [ st0x-op ci sid ];
-    ssh = [ st0x-op ci arda sid ];
+    infra = [ alastair github_actions_deploy ];
+    ssh = [ alastair github_actions_deploy host ];
   };
 }
