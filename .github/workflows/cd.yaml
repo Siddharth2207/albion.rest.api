@@ -80,4 +80,4 @@ jobs:
       - run: ./prep.sh
 
       - name: Build and deploy
-        run: nix run .#deployAll -- -i ~/.ssh/id_ed25519
+        run: nix run .#deployService -- rest-api
