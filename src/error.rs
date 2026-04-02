@@ -113,10 +113,20 @@ mod tests {
         Err(ApiError::Internal("something broke".into()))
     }
 
+    #[get("/forbidden")]
+    fn forbidden() -> Result<(), ApiError> {
+        Err(ApiError::Forbidden("admin only".into()))
+    }
+
+    #[get("/rate-limited")]
+    fn rate_limited() -> Result<(), ApiError> {
+        Err(ApiError::RateLimited("too many requests".into()))
+    }
+
     fn error_client() -> Client {
         let rocket = rocket::build().mount(
             "/",
-            rocket::routes![bad_request, unauthorized, not_found, internal],
+            rocket::routes![bad_request, unauthorized, not_found, internal, forbidden, rate_limited],
         );
         Client::tracked(rocket).expect("valid rocket instance")
     }
@@ -165,5 +175,117 @@ mod tests {
             "INTERNAL_ERROR",
             "something broke",
         );
+    }
+
+    #[test]
+    fn test_forbidden_returns_403() {
+        let client = error_client();
+        assert_error_response(&client, "/forbidden", 403, "FORBIDDEN", "admin only");
+    }
+
+    #[test]
+    fn test_non_rate_limited_errors_have_no_retry_after_header() {
+        let client = error_client();
+        let response = client.get("/bad-request").dispatch();
+        assert!(
+            response.headers().get_one("Retry-After").is_none(),
+            "non-rate-limited errors must not have Retry-After header"
+        );
+        let response = client.get("/internal").dispatch();
+        assert!(
+            response.headers().get_one("Retry-After").is_none(),
+            "non-rate-limited errors must not have Retry-After header"
+        );
+    }
+
+    #[test]
+    fn test_rate_limited_returns_429_with_retry_after_header() {
+        let client = error_client();
+        let response = client.get("/rate-limited").dispatch();
+        assert_eq!(response.status().code, 429);
+        let body: serde_json::Value =
+            serde_json::from_str(&response.into_string().unwrap()).unwrap();
+        assert_eq!(body["error"]["code"], "RATE_LIMITED");
+        assert_eq!(body["error"]["message"], "too many requests");
+    }
+
+    #[test]
+    fn test_rate_limited_has_retry_after_header() {
+        let client = error_client();
+        let response = client.get("/rate-limited").dispatch();
+        let retry_after = response.headers().get_one("Retry-After");
+        assert_eq!(
+            retry_after,
+            Some("60"),
+            "RateLimited response must include Retry-After: 60 header"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Display trait – each variant produces human-readable messages
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bad_request_display() {
+        let err = ApiError::BadRequest("invalid input".into());
+        assert_eq!(err.to_string(), "Bad request: invalid input");
+    }
+
+    #[test]
+    fn test_unauthorized_display() {
+        let err = ApiError::Unauthorized("no token".into());
+        assert_eq!(err.to_string(), "Unauthorized: no token");
+    }
+
+    #[test]
+    fn test_forbidden_display() {
+        let err = ApiError::Forbidden("admin only".into());
+        assert_eq!(err.to_string(), "Forbidden: admin only");
+    }
+
+    #[test]
+    fn test_not_found_display() {
+        let err = ApiError::NotFound("order not found".into());
+        assert_eq!(err.to_string(), "Not found: order not found");
+    }
+
+    #[test]
+    fn test_internal_display() {
+        let err = ApiError::Internal("something broke".into());
+        assert_eq!(err.to_string(), "Internal error: something broke");
+    }
+
+    #[test]
+    fn test_rate_limited_display() {
+        let err = ApiError::RateLimited("too many requests".into());
+        assert_eq!(err.to_string(), "Rate limited: too many requests");
+    }
+
+    // -----------------------------------------------------------------------
+    // ApiErrorResponse – serialization
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_api_error_response_serializes() {
+        let resp = ApiErrorResponse {
+            request_id: "test-123".into(),
+            error: ApiErrorDetail {
+                code: "BAD_REQUEST".into(),
+                message: "invalid".into(),
+            },
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"request_id\""));
+        assert!(json.contains("\"code\""));
+        assert!(json.contains("\"message\""));
+    }
+
+    #[test]
+    fn test_api_error_response_deserializes() {
+        let json = r#"{"request_id":"abc","error":{"code":"NOT_FOUND","message":"gone"}}"#;
+        let resp: ApiErrorResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.request_id, "abc");
+        assert_eq!(resp.error.code, "NOT_FOUND");
+        assert_eq!(resp.error.message, "gone");
     }
 }

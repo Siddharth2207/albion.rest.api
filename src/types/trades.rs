@@ -123,3 +123,115 @@ pub struct TradesByTxResponse {
     pub trades: Vec<TradeByTxEntry>,
     pub totals: TradesTotals,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_trades_pagination_params_all_optional() {
+        let json = r#"{}"#;
+        let params: TradesPaginationParams = serde_json::from_str(json).unwrap();
+        assert!(params.page.is_none());
+        assert!(params.page_size.is_none());
+        assert!(params.start_time.is_none());
+        assert!(params.end_time.is_none());
+    }
+
+    #[test]
+    fn test_trades_pagination_params_with_time_range() {
+        let json = r#"{"page": 1, "pageSize": 20, "startTime": 1718452800, "endTime": 1718539200}"#;
+        let params: TradesPaginationParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.page, Some(1));
+        assert_eq!(params.start_time, Some(1718452800));
+        assert_eq!(params.end_time, Some(1718539200));
+    }
+
+    #[test]
+    fn test_trades_pagination_serializes_camel_case() {
+        let pagination = TradesPagination {
+            page: 1,
+            page_size: 20,
+            total_trades: 50,
+            total_pages: 3,
+            has_more: true,
+        };
+        let json = serde_json::to_string(&pagination).unwrap();
+        assert!(json.contains("\"pageSize\""));
+        assert!(json.contains("\"totalTrades\""));
+        assert!(json.contains("\"totalPages\""));
+        assert!(json.contains("\"hasMore\""));
+        assert!(!json.contains("\"page_size\""));
+    }
+
+    #[test]
+    fn test_trades_pagination_round_trip() {
+        let original = TradesPagination {
+            page: 2,
+            page_size: 10,
+            total_trades: 30,
+            total_pages: 3,
+            has_more: false,
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: TradesPagination = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.page, 2);
+        assert_eq!(deserialized.total_trades, 30);
+        assert!(!deserialized.has_more);
+    }
+
+    #[test]
+    fn test_trades_totals_serializes_camel_case() {
+        let totals = TradesTotals {
+            total_input_amount: "900000".into(),
+            total_output_amount: "500000".into(),
+            average_io_ratio: "0.00055".into(),
+        };
+        let json = serde_json::to_string(&totals).unwrap();
+        assert!(json.contains("\"totalInputAmount\""));
+        assert!(json.contains("\"totalOutputAmount\""));
+        assert!(json.contains("\"averageIoRatio\""));
+    }
+
+    #[test]
+    fn test_trade_request_deserializes() {
+        let json = r#"{
+            "inputToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "outputToken": "0x4200000000000000000000000000000000000006",
+            "maximumInput": "1000000",
+            "maximumIoRatio": "0.0006"
+        }"#;
+        let req: TradeRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.maximum_input, "1000000");
+        assert_eq!(req.maximum_io_ratio, "0.0006");
+    }
+
+    #[test]
+    fn test_trade_result_serializes_camel_case() {
+        let result = TradeResult {
+            input_amount: "900000".into(),
+            output_amount: "500000".into(),
+            actual_io_ratio: "0.00055".into(),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"inputAmount\""));
+        assert!(json.contains("\"actualIoRatio\""));
+        assert!(!json.contains("\"input_amount\""));
+    }
+
+    #[test]
+    fn test_trades_by_address_response_with_empty_trades() {
+        let resp = TradesByAddressResponse {
+            trades: vec![],
+            pagination: TradesPagination {
+                page: 1,
+                page_size: 20,
+                total_trades: 0,
+                total_pages: 0,
+                has_more: false,
+            },
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"trades\":[]"));
+    }
+}

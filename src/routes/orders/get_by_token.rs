@@ -319,6 +319,94 @@ mod tests {
     }
 
     #[rocket::async_test]
+    async fn test_pagination_math_single_item() {
+        use super::super::build_pagination;
+
+        let p = build_pagination(1, 1, 50);
+        assert_eq!(p.total_orders, 1);
+        assert_eq!(p.total_pages, 1);
+        assert!(!p.has_more);
+        assert_eq!(p.page, 1);
+        assert_eq!(p.page_size, 50);
+    }
+
+    #[rocket::async_test]
+    async fn test_pagination_math_exactly_fills_pages() {
+        use super::super::build_pagination;
+
+        let p = build_pagination(200, 1, 50);
+        assert_eq!(p.total_pages, 4);
+        assert!(p.has_more);
+
+        let p = build_pagination(200, 4, 50);
+        assert_eq!(p.total_pages, 4);
+        assert!(!p.has_more);
+    }
+
+    #[rocket::async_test]
+    async fn test_pagination_math_page_size_zero_returns_zero_pages() {
+        use super::super::build_pagination;
+
+        // page_size=0 is a degenerate case — should not panic or divide by zero
+        let p = build_pagination(100, 1, 0);
+        assert_eq!(p.total_pages, 0, "page_size=0 should yield 0 total_pages");
+        assert!(!p.has_more);
+    }
+
+    #[rocket::async_test]
+    async fn test_pagination_math_large_total() {
+        use super::super::build_pagination;
+
+        let p = build_pagination(u32::MAX, 1, 50);
+        assert!(p.total_pages > 0, "large total_count should not overflow");
+        assert!(p.has_more);
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_token_page_zero_treated_as_page_one() {
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![mock_order()]),
+            total_count: 1,
+            quotes: Ok(vec![mock_quote("1.5")]),
+        };
+        let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            .parse()
+            .unwrap();
+        let result = process_get_orders_by_token(&ds, addr, None, Some(0), None)
+            .await
+            .unwrap();
+
+        assert!(
+            result.pagination.page <= 1,
+            "page=0 should be treated as page 1, got {}",
+            result.pagination.page
+        );
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_token_all_sides() {
+        for side in [None, Some(OrderSide::Input), Some(OrderSide::Output)] {
+            let ds = MockOrdersListDataSource {
+                orders: Ok(vec![mock_order()]),
+                total_count: 1,
+                quotes: Ok(vec![mock_quote("1.5")]),
+            };
+            let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                .parse()
+                .unwrap();
+            let result = process_get_orders_by_token(&ds, addr, side, None, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                result.orders.len(),
+                1,
+                "should return 1 order for side {:?}",
+                side
+            );
+        }
+    }
+
+    #[rocket::async_test]
     async fn test_get_orders_by_token_401_without_auth() {
         let client = TestClientBuilder::new().build().await;
         let response = client
@@ -339,5 +427,66 @@ mod tests {
             .dispatch()
             .await;
         assert_eq!(response.status(), Status::UnprocessableEntity);
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_token_explicit_page_and_page_size() {
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![mock_order()]),
+            total_count: 200,
+            quotes: Ok(vec![mock_quote("1.5")]),
+        };
+        let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            .parse()
+            .unwrap();
+        let result = process_get_orders_by_token(&ds, addr, None, Some(3), Some(25))
+            .await
+            .unwrap();
+
+        assert_eq!(result.pagination.page, 3);
+        assert_eq!(result.pagination.page_size, 25);
+        assert_eq!(result.pagination.total_orders, 200);
+        assert_eq!(result.pagination.total_pages, 8);
+        assert!(result.pagination.has_more);
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_token_page_size_capped_at_max() {
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![]),
+            total_count: 0,
+            quotes: Ok(vec![]),
+        };
+        let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            .parse()
+            .unwrap();
+        let result = process_get_orders_by_token(&ds, addr, None, Some(1), Some(999))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.pagination.page_size,
+            super::super::MAX_PAGE_SIZE as u32,
+            "page_size should be capped at MAX_PAGE_SIZE"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_orders_by_token_last_page_has_more_false() {
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![mock_order()]),
+            total_count: 50,
+            quotes: Ok(vec![mock_quote("1.5")]),
+        };
+        let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            .parse()
+            .unwrap();
+        let result = process_get_orders_by_token(&ds, addr, Some(OrderSide::Output), Some(2), Some(25))
+            .await
+            .unwrap();
+
+        assert_eq!(result.pagination.page, 2);
+        assert_eq!(result.pagination.total_pages, 2);
+        assert!(!result.pagination.has_more);
     }
 }

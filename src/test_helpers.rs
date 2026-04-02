@@ -2,10 +2,8 @@ use alloy::primitives::{Address, U256};
 use base64::Engine;
 use rain_math_float::Float;
 use rain_orderbook_bindings::IOrderBookV6::{EvaluableV4, OrderV4, IOV2};
-use rain_orderbook_common::raindex_client::orders::RaindexOrder;
 use rain_orderbook_common::take_orders::TakeOrderCandidate;
 use rocket::local::asynchronous::Client;
-use serde_json::json;
 
 pub(crate) async fn client() -> Client {
     TestClientBuilder::new().build().await
@@ -193,85 +191,8 @@ pub(crate) fn basic_auth_header(key_id: &str, secret: &str) -> String {
     format!("Basic {encoded}")
 }
 
-fn stub_raindex_client() -> serde_json::Value {
-    json!({
-        "orderbook_yaml": {
-            "documents": ["version: 4\nnetworks:\n  base:\n    rpcs:\n      - https://mainnet.base.org\n    chain-id: 8453\n    currency: ETH\nsubgraphs:\n  base: https://example.com/sg\norderbooks:\n  base:\n    address: 0xd2938e7c9fe3597f78832ce780feb61945c377d7\n    network: base\n    subgraph: base\n    deployment-block: 0\ndeployers:\n  base:\n    address: 0xC1A14cE2fd58A3A2f99deCb8eDd866204eE07f8D\n    network: base\n"],
-            "profile": "strict"
-        }
-    })
-}
-
-fn order_json() -> serde_json::Value {
-    let rc = stub_raindex_client();
-    json!({
-        "raindexClient": rc,
-        "chainId": 8453,
-        "id": "0x0000000000000000000000000000000000000000000000000000000000000001",
-        "orderBytes": "0x01",
-        "orderHash": "0x000000000000000000000000000000000000000000000000000000000000abcd",
-        "owner": "0x0000000000000000000000000000000000000001",
-        "orderbook": "0xd2938e7c9fe3597f78832ce780feb61945c377d7",
-        "active": true,
-        "timestampAdded": "0x000000000000000000000000000000000000000000000000000000006553f100",
-        "meta": null,
-        "parsedMeta": [],
-        "rainlang": null,
-        "transaction": {
-            "id": "0x0000000000000000000000000000000000000000000000000000000000000099",
-            "from": "0x0000000000000000000000000000000000000001",
-            "blockNumber": "0x0000000000000000000000000000000000000000000000000000000000000001",
-            "timestamp": "0x000000000000000000000000000000000000000000000000000000006553f100"
-        },
-        "tradesCount": 0,
-        "inputs": [{
-            "raindexClient": rc,
-            "chainId": 8453,
-            "vaultType": "input",
-            "id": "0x01",
-            "owner": "0x0000000000000000000000000000000000000001",
-            "vaultId": "0x0000000000000000000000000000000000000000000000000000000000000001",
-            "balance": "0x0000000000000000000000000000000000000000000000000000000000000001",
-            "formattedBalance": "1.000000",
-            "token": {
-                "chainId": 8453,
-                "id": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-                "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-                "name": "USD Coin",
-                "symbol": "USDC",
-                "decimals": 6
-            },
-            "orderbook": "0xd2938e7c9fe3597f78832ce780feb61945c377d7",
-            "ordersAsInputs": [],
-            "ordersAsOutputs": []
-        }],
-        "outputs": [{
-            "raindexClient": rc,
-            "chainId": 8453,
-            "vaultType": "output",
-            "id": "0x02",
-            "owner": "0x0000000000000000000000000000000000000001",
-            "vaultId": "0x0000000000000000000000000000000000000000000000000000000000000002",
-            "balance": "0xffffffff00000000000000000000000000000000000000000000000000000005",
-            "formattedBalance": "0.500000000000000000",
-            "token": {
-                "chainId": 8453,
-                "id": "0x4200000000000000000000000000000000000006",
-                "address": "0x4200000000000000000000000000000000000006",
-                "name": "Wrapped Ether",
-                "symbol": "WETH",
-                "decimals": 18
-            },
-            "orderbook": "0xd2938e7c9fe3597f78832ce780feb61945c377d7",
-            "ordersAsInputs": [],
-            "ordersAsOutputs": []
-        }]
-    })
-}
-
-pub(crate) fn mock_order() -> RaindexOrder {
-    serde_json::from_value(order_json()).expect("deserialize mock RaindexOrder")
-}
+// Delegate to the canonical test fixtures to avoid duplicate mock data.
+pub(crate) use crate::routes::order::test_fixtures::mock_order;
 
 pub(crate) fn mock_candidate(max_output: &str, ratio: &str) -> TakeOrderCandidate {
     let token_a = Address::from([4u8; 20]);

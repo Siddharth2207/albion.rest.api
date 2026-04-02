@@ -268,6 +268,43 @@ mod tests {
     }
 
     #[rocket::async_test]
+    async fn test_process_get_order_multiple_trades() {
+        let ds = MockOrderDataSource {
+            orders: Ok(vec![mock_order()]),
+            trades: Ok(vec![mock_trade(), mock_trade()]),
+            quotes: Ok(vec![mock_quote("1.5")]),
+            calldata: Ok(Bytes::new()),
+        };
+        let detail = process_get_order(&ds, test_hash()).await.unwrap();
+
+        assert_eq!(detail.trades.len(), 2, "should include all trades");
+        for trade in &detail.trades {
+            assert!(!trade.id.is_empty(), "trade id should not be empty");
+            assert!(trade.timestamp > 0, "trade timestamp should be positive");
+        }
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_order_response_fields_are_populated() {
+        let ds = MockOrderDataSource {
+            orders: Ok(vec![mock_order()]),
+            trades: Ok(vec![]),
+            quotes: Ok(vec![mock_quote("3.0")]),
+            calldata: Ok(Bytes::new()),
+        };
+        let detail = process_get_order(&ds, test_hash()).await.unwrap();
+
+        // Verify all fields are populated, not just shape
+        assert_ne!(detail.orderbook_id, Address::ZERO, "orderbook_id should not be zero");
+        assert_ne!(detail.owner, Address::ZERO, "owner should not be zero");
+        assert!(detail.created_at > 0, "created_at should be positive");
+        assert!(!detail.input_token.symbol.is_empty(), "input symbol should not be empty");
+        assert!(!detail.output_token.symbol.is_empty(), "output symbol should not be empty");
+        assert_eq!(detail.io_ratio, "3.0");
+        assert_eq!(detail.order_details.io_ratio, "3.0");
+    }
+
+    #[rocket::async_test]
     async fn test_determine_order_type_solver_default() {
         let order = mock_order();
         assert_eq!(determine_order_type(&order), OrderType::Solver);

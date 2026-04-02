@@ -205,4 +205,140 @@ mod tests {
         assert!(json.contains("\"type\":\"dca\""));
         assert!(!json.contains("\"type_\""));
     }
+
+    #[test]
+    fn test_order_type_serializes_lowercase() {
+        let dca = serde_json::to_string(&OrderType::Dca).unwrap();
+        let solver = serde_json::to_string(&OrderType::Solver).unwrap();
+        assert_eq!(dca, "\"dca\"");
+        assert_eq!(solver, "\"solver\"");
+    }
+
+    #[test]
+    fn test_order_type_rejects_uppercase() {
+        assert!(serde_json::from_str::<OrderType>("\"DCA\"").is_err());
+        assert!(serde_json::from_str::<OrderType>("\"Solver\"").is_err());
+    }
+
+    #[test]
+    fn test_deploy_solver_order_request_deserializes() {
+        let json = r#"{
+            "inputToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "outputToken": "0x4200000000000000000000000000000000000006",
+            "amount": "1000000",
+            "ioRatio": "0.0005"
+        }"#;
+        let req: DeploySolverOrderRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.amount, "1000000");
+        assert_eq!(req.io_ratio, "0.0005");
+        assert!(req.input_vault_id.is_none());
+        assert!(req.output_vault_id.is_none());
+    }
+
+    #[test]
+    fn test_deploy_solver_order_request_with_vault_ids() {
+        let json = r#"{
+            "inputToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "outputToken": "0x4200000000000000000000000000000000000006",
+            "amount": "1000000",
+            "ioRatio": "0.0005",
+            "inputVaultId": "0x1",
+            "outputVaultId": "0x2"
+        }"#;
+        let req: DeploySolverOrderRequest = serde_json::from_str(json).unwrap();
+        assert!(req.input_vault_id.is_some());
+        assert!(req.output_vault_id.is_some());
+    }
+
+    #[test]
+    fn test_deploy_dca_order_request_deserializes() {
+        let json = r#"{
+            "inputToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "outputToken": "0x4200000000000000000000000000000000000006",
+            "budgetAmount": "1000",
+            "period": 4,
+            "periodUnit": "hours",
+            "startIo": "0.0005",
+            "floorIo": "0.0003"
+        }"#;
+        let req: DeployDcaOrderRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.budget_amount, "1000");
+        assert_eq!(req.period, 4);
+        assert_eq!(req.period_unit, PeriodUnit::Hours);
+        assert_eq!(req.start_io, "0.0005");
+        assert_eq!(req.floor_io, "0.0003");
+    }
+
+    #[test]
+    fn test_deploy_dca_rejects_missing_period_unit() {
+        let json = r#"{
+            "inputToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "outputToken": "0x4200000000000000000000000000000000000006",
+            "budgetAmount": "1000",
+            "period": 4,
+            "startIo": "0.0005",
+            "floorIo": "0.0003"
+        }"#;
+        assert!(serde_json::from_str::<DeployDcaOrderRequest>(json).is_err());
+    }
+
+    #[test]
+    fn test_cancel_order_request_deserializes() {
+        let json = r#"{
+            "orderHash": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
+        }"#;
+        let req: CancelOrderRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            format!("{}", req.order_hash),
+            "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
+        );
+    }
+
+    #[test]
+    fn test_cancel_order_request_rejects_short_hash() {
+        let json = r#"{"orderHash": "0xabcdef"}"#;
+        assert!(serde_json::from_str::<CancelOrderRequest>(json).is_err());
+    }
+
+    #[test]
+    fn test_deploy_order_response_serializes_camel_case() {
+        let resp = DeployOrderResponse {
+            to: Address::ZERO,
+            data: Bytes::new(),
+            value: U256::ZERO,
+            approvals: vec![],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"approvals\""));
+        assert!(!json.contains("\"to_\""));
+    }
+
+    #[test]
+    fn test_cancel_summary_serializes_camel_case() {
+        let summary = CancelSummary {
+            vaults_to_withdraw: 2,
+            tokens_returned: vec![],
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("\"vaultsToWithdraw\""));
+        assert!(json.contains("\"tokensReturned\""));
+        assert!(!json.contains("\"vaults_to_withdraw\""));
+    }
+
+    #[test]
+    fn test_order_trade_entry_serializes_camel_case() {
+        let entry = OrderTradeEntry {
+            id: "trade-1".into(),
+            tx_hash: FixedBytes::ZERO,
+            input_amount: "1000".into(),
+            output_amount: "500".into(),
+            timestamp: 1718452800,
+            sender: Address::ZERO,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"txHash\""));
+        assert!(json.contains("\"inputAmount\""));
+        assert!(json.contains("\"outputAmount\""));
+        assert!(!json.contains("\"tx_hash\""));
+    }
 }
