@@ -1,5 +1,5 @@
 {
-  description = "st0x REST API";
+  description = "Albion REST API";
 
   inputs = {
     rainix.url = "github:rainlanguage/rainix";
@@ -19,12 +19,12 @@
   outputs = { self, flake-utils, rainix, ragenix, deploy-rs, disko
     , nixos-anywhere, crane, ... }:
     {
-      nixosConfigurations.st0x-rest-api =
+      nixosConfigurations.albion-rest-api =
         rainix.inputs.nixpkgs.lib.nixosSystem {
           system = "x86_64-linux";
 
           specialArgs = {
-            docsRoot = self.packages.x86_64-linux.st0x-docs;
+            docsRoot = self.packages.x86_64-linux.albion-docs;
           };
 
           modules =
@@ -55,12 +55,12 @@
               localSystem = system;
             };
 
-          st0xRust = pkgs.callPackage ./rust.nix {
+          albionRust = pkgs.callPackage ./rust.nix {
             inherit craneLib;
             inherit (pkgs) sqlx-cli;
           };
-          st0x-docs = pkgs.stdenv.mkDerivation {
-            pname = "st0x-docs";
+          albion-docs = pkgs.stdenv.mkDerivation {
+            pname = "albion-docs";
             version = "0.1.0";
             src = ./docs;
             nativeBuildInputs = [ pkgs.mdbook ];
@@ -69,7 +69,7 @@
           };
 
         in rainixPkgs // deployPkgs // {
-          inherit st0x-docs;
+          inherit albion-docs;
           rs-test = rainix.mkTask.${system} {
             name = "rs-test";
             body = ''
@@ -79,8 +79,8 @@
           };
           inherit (infraPkgs) tfInit tfPlan tfApply tfDestroy tfEditVars;
 
-          st0x-rest-api = st0xRust.package;
-          st0x-clippy = st0xRust.clippy;
+          albion-rest-api = albionRust.package;
+          albion-clippy = albionRust.clippy;
 
           prepSolArtifacts = rainix.mkTask.${system} {
             name = "prep-sol-artifacts";
@@ -89,6 +89,9 @@
               set -euxo pipefail
 
               (cd lib/rain.orderbook/ && forge build)
+              (cd lib/rain.orderbook/lib/rain.interpreter/ && forge build)
+              (cd lib/rain.orderbook/lib/rain.interpreter/lib/rain.metadata/ && forge build)
+              (cd lib/rain.orderbook/lib/rain.interpreter/lib/rain.interpreter.interface/lib/rain.math.float/ && forge build)
               (cd lib/rain.orderbook/lib/rain.orderbook.interface/lib/rain.interpreter.interface/lib/rain.math.float/ && forge build)
             '';
           };
@@ -101,7 +104,7 @@
               ${infraPkgs.resolveIp}
               ssh_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $identity"
 
-              nixos-anywhere --flake ".#st0x-rest-api" \
+              nixos-anywhere --flake ".#albion-rest-api" \
                 --option pure-eval false \
                 --ssh-option "IdentityFile=$identity" \
                 --target-host "root@$host_ip" "$@"

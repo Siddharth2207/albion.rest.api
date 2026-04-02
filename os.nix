@@ -11,7 +11,7 @@ let
       path = "/nix/var/nix/profiles/per-service/${name}/bin/${cfg.bin}";
       configFile = ./config/${name}.toml;
     in {
-      description = "st0x ${cfg.bin} (${name})";
+      description = "Albion ${cfg.bin} (${name})";
 
       wantedBy = [ ];
 
@@ -20,12 +20,12 @@ let
 
       unitConfig = {
         "X-OnlyManualStart" = true;
-        ConditionPathExists = "/run/st0x/${name}.ready";
+        ConditionPathExists = "/run/albion/${name}.ready";
       };
 
       serviceConfig = {
         DynamicUser = true;
-        SupplementaryGroups = [ "st0x" ];
+        SupplementaryGroups = [ "albion" ];
         ExecStart = "${path} serve --config ${configFile}";
         Restart = "always";
         RestartSec = 5;
@@ -99,7 +99,7 @@ in {
       enable = true;
       recommendedTlsSettings = true;
       recommendedProxySettings = true;
-      virtualHosts."api.st0x.io" = {
+      virtualHosts."api.albion.rest" = {
         enableACME = true;
         forceSSL = true;
         locations."/" = {
@@ -113,7 +113,7 @@ in {
 
   security.acme = {
     acceptTerms = true;
-    defaults.email = "ops@st0x.io";
+    defaults.email = "ops@albion.rest";
   };
 
   networking.firewall = {
@@ -126,7 +126,7 @@ in {
   };
 
   fileSystems."/mnt/data" = {
-    device = "/dev/disk/by-id/scsi-0DO_Volume_st0x-rest-api-data";
+    device = "/dev/disk/by-id/scsi-0DO_Volume_albion-rest-api-data";
     fsType = "ext4";
   };
 
@@ -135,6 +135,7 @@ in {
       experimental-features = [ "nix-command" "flakes" ];
       auto-optimise-store = true;
       download-buffer-size = 268435456;
+      sandbox = "relaxed";
     };
 
     gc = {
@@ -144,13 +145,13 @@ in {
     };
   };
 
-  users.groups.st0x = { };
+  users.groups.albion = { };
   programs.bash.interactiveShellInit = "set -o vi";
 
   services.logrotate = {
     enable = true;
-    settings."/mnt/data/st0x-rest-api/logs/*.log" = {
-      su = "root st0x";
+    settings."/mnt/data/albion-rest-api/logs/*.log" = {
+      su = "root albion";
       rotate = 14;
       weekly = true;
       compress = true;
@@ -160,8 +161,8 @@ in {
   };
 
   systemd.tmpfiles.rules = [
-    "d /mnt/data/st0x-rest-api 0775 root st0x -"
-    "d /mnt/data/st0x-rest-api/logs 0775 root st0x -"
+    "d /mnt/data/albion-rest-api 0775 root albion -"
+    "d /mnt/data/albion-rest-api/logs 0775 root albion -"
   ];
   systemd.services = lib.mapAttrs mkService enabledServices;
 
@@ -176,9 +177,14 @@ in {
   system.activationScripts.per-service-profiles.text =
     "mkdir -p /nix/var/nix/profiles/per-service";
 
-  system.activationScripts.st0x-docs.text = ''
-    ln -sfn ${docsRoot} /var/lib/st0x-docs
+  system.activationScripts.albion-docs.text = ''
+    ln -sfn ${docsRoot} /var/lib/albion-docs
   '';
+
+  swapDevices = [{
+    device = "/swapfile";
+    size = 4096;
+  }];
 
   system.stateVersion = "24.11";
 }

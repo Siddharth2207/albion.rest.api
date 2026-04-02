@@ -15,7 +15,7 @@ Returns calldata to deploy a DCA order that periodically buys a token at a set i
 ### Request
 
 ```bash
-curl -X POST https://api.st0x.io/v1/order/dca \
+curl -X POST https://api.albion.rest/v1/order/dca \
   -H "Authorization: Basic <credentials>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -84,7 +84,7 @@ Retrieve the full state of an order including vault balances and trade history.
 ### Request
 
 ```bash
-curl https://api.st0x.io/v1/order/0xabc123... \
+curl https://api.albion.rest/v1/order/0xabc123... \
   -H "Authorization: Basic <credentials>"
 ```
 
@@ -139,7 +139,7 @@ Paginated list of orders for a wallet address.
 ### Request
 
 ```bash
-curl "https://api.st0x.io/v1/orders/0xOwnerAddress?page=1&pageSize=10" \
+curl "https://api.albion.rest/v1/orders/0xOwnerAddress?page=1&pageSize=10" \
   -H "Authorization: Basic <credentials>"
 ```
 
@@ -185,7 +185,7 @@ Get all orders created in a specific transaction.
 ### Request
 
 ```bash
-curl https://api.st0x.io/v1/orders/tx/0xTxHash... \
+curl https://api.albion.rest/v1/orders/tx/0xTxHash... \
   -H "Authorization: Basic <credentials>"
 ```
 
@@ -219,7 +219,7 @@ Returns calldata for cancelling an order and withdrawing from its vaults.
 ### Request
 
 ```bash
-curl -X POST https://api.st0x.io/v1/order/cancel \
+curl -X POST https://api.albion.rest/v1/order/cancel \
   -H "Authorization: Basic <credentials>" \
   -H "Content-Type: application/json" \
   -d '{

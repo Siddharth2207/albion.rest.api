@@ -27,7 +27,7 @@ ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519
 ### 3. DigitalOcean account setup
 - Create a **Personal Access Token** (read+write) at: DigitalOcean → API → Tokens
 - Upload your SSH public key to DigitalOcean under: Settings → Security → SSH Keys
-  - Note the **name** you give it — you'll need it below (default expected: `st0x-op`)
+  - Note the **name** you give it — you'll need it below (default expected: `albion-deployments`)
 
 ### 4. Enter the Nix dev shell
 All commands below must be run inside this shell:
@@ -75,7 +75,7 @@ do_token = "your-digitalocean-api-token"
 
 Optional overrides (defaults shown):
 ```hcl
-ssh_key_name   = "st0x-op"   # Name of your SSH key in DigitalOcean
+ssh_key_name   = "albion-deployments"   # Name of your SSH key in DigitalOcean
 region         = "nyc3"       # DigitalOcean region slug
 droplet_size   = "s-2vcpu-4gb"
 volume_size_gb = 5
@@ -100,8 +100,8 @@ nix develop -c tf-apply
 ```
 
 This provisions:
-- Ubuntu 24.04 droplet (`st0x-rest-api-nixos`) in the chosen region
-- 5 GB block storage volume (`st0x-rest-api-data`) mounted at `/mnt/data`
+- Ubuntu 24.04 droplet (`albion-rest-api-nixos`) in the chosen region
+- 5 GB block storage volume (`albion-rest-api-data`) mounted at `/mnt/data`
 - A reserved IP attached to the droplet
 
 The Terraform state is encrypted with `rage` and committed as
@@ -175,7 +175,7 @@ The deploy-rs workflow:
 
 ## Step 7 — DNS and TLS
 
-1. Point your domain (`api.st0x.io` or your fork's domain) to the **reserved IP**
+1. Point your domain (`api.albion.rest` or your fork's domain) to the **reserved IP**
    output by Terraform:
    ```bash
    nix develop -c resolve-ip   # prints the reserved IP
@@ -185,7 +185,7 @@ The deploy-rs workflow:
 
 Check the domain in `os.nix`:
 ```nix
-virtualHosts."api.st0x.io" = { ... };
+virtualHosts."api.albion.rest" = { ... };
 ```
 Update it to your domain before deploying if this is a fork.
 
@@ -203,7 +203,7 @@ SSH into the server and create the first API key:
 nix develop -c remote   # opens an SSH session as root
 
 # On the server:
-/nix/var/nix/profiles/per-service/rest-api/bin/st0x_rest_api \
+/nix/var/nix/profiles/per-service/rest-api/bin/albion_rest_api \
   keys create --config /nix/var/nix/profiles/per-service/rest-api/../../../... \
   --name "admin"
 ```
@@ -233,7 +233,7 @@ nix develop -c remote
 # on server:
 journalctl -u rest-api -f
 # or log files:
-ls /mnt/data/st0x-rest-api/logs/
+ls /mnt/data/albion-rest-api/logs/
 ```
 
 ### Check service status
@@ -261,8 +261,8 @@ Your machine
 
 Server (NixOS on DigitalOcean)
   ├─ Nginx (443)  → reverse proxy → Rocket API (127.0.0.1:8000)
-  ├─ SQLite DB    → /mnt/data/st0x-rest-api/st0x.db
-  ├─ Logs         → /mnt/data/st0x-rest-api/logs/
+  ├─ SQLite DB    → /mnt/data/albion-rest-api/albion.db
+  ├─ Logs         → /mnt/data/albion-rest-api/logs/
   └─ /mnt/data    → DigitalOcean block volume (persists across reboots)
 ```
 
@@ -272,7 +272,7 @@ Server (NixOS on DigitalOcean)
 
 Set `RUST_LOG` to control log verbosity (configured in `.env`):
 ```
-RUST_LOG=st0x_rest_api=info,rocket=warn,warn
+RUST_LOG=albion_rest_api=info,rocket=warn,warn
 ```
 
 This is read by the systemd service environment. To change it on the server,

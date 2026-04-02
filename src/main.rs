@@ -78,9 +78,9 @@ enum StartupError {
         (name = "Registry", description = "Registry information endpoints"),
     ),
     info(
-        title = "st0x REST API",
+        title = "Albion REST API",
         version = "0.1.0",
-        description = "REST API for st0x orderbook operations",
+        description = "REST API for Albion orderbook operations",
     )
 )]
 struct ApiDoc;

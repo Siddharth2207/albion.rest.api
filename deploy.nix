@@ -5,7 +5,7 @@ let
   inherit (deploy-rs.lib.${system}) activate;
   profileBase = "/nix/var/nix/profiles/per-service";
 
-  st0xPackage = self.packages.${system}.st0x-rest-api;
+  albionPackage = self.packages.${system}.albion-rest-api;
 
   services = import ./services.nix;
   enabledServices = builtins.attrNames (builtins.removeAttrs services
@@ -14,11 +14,11 @@ let
 
   mkServiceProfile = name:
     let
-      markerFile = "/run/st0x/${name}.ready";
-    in activate.custom st0xPackage (builtins.concatStringsSep " && " [
+      markerFile = "/run/albion/${name}.ready";
+    in activate.custom albionPackage (builtins.concatStringsSep " && " [
       "systemctl stop ${name} || true"
       "rm -f ${markerFile}"
-      "mkdir -p /run/st0x"
+      "mkdir -p /run/albion"
       "touch ${markerFile}"
       "systemctl restart ${name}"
     ]);
@@ -30,7 +30,7 @@ let
 
 in {
   config = {
-    nodes.st0x-rest-api = {
+    nodes.albion-rest-api = {
       hostname = builtins.getEnv "DEPLOY_HOST";
       sshUser = "root";
       user = "root";
@@ -38,7 +38,7 @@ in {
       profilesOrder = [ "system" ] ++ enabledServices;
 
       profiles = {
-        system.path = activate.nixos self.nixosConfigurations.st0x-rest-api;
+        system.path = activate.nixos self.nixosConfigurations.albion-rest-api;
       } // builtins.listToAttrs (map (name: {
         inherit name;
         value = mkProfile name;
@@ -69,7 +69,7 @@ in {
         runtimeInputs = deployInputs;
         text = ''
           ${deployPreamble}
-          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} .#st0x-rest-api.system \
+          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} .#albion-rest-api.system \
             -- --impure "$@"
         '';
       };
@@ -81,7 +81,7 @@ in {
           ${deployPreamble}
           profile="''${1:?usage: deploy-service <profile>}"
           shift
-          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} ".#st0x-rest-api.$profile" \
+          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} ".#albion-rest-api.$profile" \
             -- --impure "$@"
         '';
       };
@@ -91,7 +91,7 @@ in {
         runtimeInputs = deployInputs;
         text = ''
           ${deployPreamble}
-          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} .#st0x-rest-api \
+          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} .#albion-rest-api \
             -- --impure "$@"
         '';
       };

@@ -1,6 +1,6 @@
 [book]
-title = "st0x API Documentation"
-authors = ["st0x Technology"]
+title = "Albion API Documentation"
+authors = ["Albion Labs"]
 language = "en"
 src = "src"
 
@@ -9,5 +9,5 @@ build-dir = "book"
 
 [output.html]
 default-theme = "light"
-git-repository-url = "https://github.com/ST0x-Technology/st0x-rest-api"
+git-repository-url = "https://github.com/albionlabs/albion.rest.api"
 site-url = "/docs/"

@@ -11,7 +11,7 @@ GET /registry
 ### Request
 
 ```bash
-curl https://api.st0x.io/registry \
+curl https://api.albion.rest/registry \
   -H "Authorization: Basic <credentials>"
 ```
 

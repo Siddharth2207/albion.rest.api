@@ -13,7 +13,7 @@ Returns all tokens supported on the Base network.
 ### Request
 
 ```bash
-curl https://api.st0x.io/v1/tokens \
+curl https://api.albion.rest/v1/tokens \
   -H "Authorization: Basic <credentials>"
 ```
 
