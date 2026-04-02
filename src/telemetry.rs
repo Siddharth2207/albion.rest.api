@@ -3,6 +3,8 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 static TELEMETRY_INIT: Once = Once::new();
+const DEFAULT_LOG_FILTER: &str =
+    "albion_rest_api=info,rain_orderbook_common=info,rain_orderbook_quote=info,rocket=warn,warn";
 
 pub fn init(log_dir: &str) -> Result<WorkerGuard, String> {
     let mut guard_slot: Option<WorkerGuard> = None;
@@ -11,9 +13,9 @@ pub fn init(log_dir: &str) -> Result<WorkerGuard, String> {
     TELEMETRY_INIT.call_once(|| {
         let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|e| {
             eprintln!("invalid RUST_LOG filter, using default: {e}");
-            EnvFilter::new("st0x_rest_api=info,rocket=warn,warn")
+            EnvFilter::new(DEFAULT_LOG_FILTER)
         });
-        let file_appender = tracing_appender::rolling::daily(&log_dir, "st0x-rest-api.log");
+        let file_appender = tracing_appender::rolling::daily(&log_dir, "albion-rest-api.log");
         let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
 
         let init_result = tracing_subscriber::registry()

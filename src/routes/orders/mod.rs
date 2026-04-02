@@ -9,11 +9,61 @@ use async_trait::async_trait;
 use rain_orderbook_common::raindex_client::order_quotes::RaindexOrderQuote;
 use rain_orderbook_common::raindex_client::orders::{GetOrdersFilters, RaindexOrder};
 use rain_orderbook_common::raindex_client::RaindexClient;
+use rain_orderbook_common::raindex_client::RaindexError;
+use rain_orderbook_common::rpc_client::RpcClientError;
 use rocket::Route;
 use std::time::Instant;
 
 pub(crate) const DEFAULT_PAGE_SIZE: u32 = 20;
 pub(crate) const MAX_PAGE_SIZE: u16 = 50;
+
+pub(crate) struct OrderQuotesResult {
+    pub quotes: Vec<RaindexOrderQuote>,
+    pub duration_ms: u128,
+}
+
+struct QuoteErrorClassification {
+    class: &'static str,
+    upstream_http_status: Option<u16>,
+    upstream_rate_limited: bool,
+}
+
+fn extract_http_status(message: &str) -> Option<u16> {
+    message
+        .split(|c: char| !c.is_ascii_digit())
+        .find_map(|part| match part.len() {
+            3 => part
+                .parse::<u16>()
+                .ok()
+                .filter(|status| (400..600).contains(status)),
+            _ => None,
+        })
+}
+
+fn classify_quote_error(err: &RaindexError) -> QuoteErrorClassification {
+    let message = err.to_string();
+    let message_lower = message.to_ascii_lowercase();
+    let upstream_http_status = extract_http_status(&message);
+    let upstream_rate_limited = message.contains("429")
+        || message_lower.contains("rate limit")
+        || message_lower.contains("too many requests");
+
+    let class = match err {
+        RaindexError::RpcClientError(RpcClientError::RateLimited { .. }) => "upstream_rate_limited",
+        _ if upstream_rate_limited => "upstream_rate_limited",
+        _ => match upstream_http_status {
+            Some(status) if (400..500).contains(&status) => "upstream_http_4xx",
+            Some(status) if (500..600).contains(&status) => "upstream_http_5xx",
+            _ => "upstream_other",
+        },
+    };
+
+    QuoteErrorClassification {
+        class,
+        upstream_http_status,
+        upstream_rate_limited,
+    }
+}
 
 #[async_trait]
 pub(crate) trait OrdersListDataSource: Send + Sync {
@@ -24,10 +74,7 @@ pub(crate) trait OrdersListDataSource: Send + Sync {
         page_size: Option<u16>,
     ) -> Result<(Vec<RaindexOrder>, u32), ApiError>;
 
-    async fn get_order_quotes(
-        &self,
-        order: &RaindexOrder,
-    ) -> Result<Vec<RaindexOrderQuote>, ApiError>;
+    async fn get_order_quotes(&self, order: &RaindexOrder) -> Result<OrderQuotesResult, ApiError>;
 }
 
 pub(crate) struct RaindexOrdersListDataSource<'a> {
@@ -62,27 +109,33 @@ impl<'a> OrdersListDataSource for RaindexOrdersListDataSource<'a> {
         Ok((result.orders().to_vec(), result.total_count()))
     }
 
-    async fn get_order_quotes(
-        &self,
-        order: &RaindexOrder,
-    ) -> Result<Vec<RaindexOrderQuote>, ApiError> {
+    async fn get_order_quotes(&self, order: &RaindexOrder) -> Result<OrderQuotesResult, ApiError> {
         let start = Instant::now();
         let order_hash = order.order_hash();
         match order.get_quotes(None, None).await {
             Ok(quotes) => {
+                let duration_ms = start.elapsed().as_millis();
                 tracing::info!(
                     ?order_hash,
                     quote_count = quotes.len(),
-                    duration_ms = start.elapsed().as_millis(),
+                    duration_ms,
                     "queried order quotes"
                 );
-                Ok(quotes)
+                Ok(OrderQuotesResult {
+                    quotes,
+                    duration_ms,
+                })
             }
             Err(e) => {
+                let duration_ms = start.elapsed().as_millis();
+                let classification = classify_quote_error(&e);
                 tracing::error!(
                     error = %e,
                     ?order_hash,
-                    duration_ms = start.elapsed().as_millis(),
+                    duration_ms,
+                    upstream_error_class = classification.class,
+                    upstream_http_status = classification.upstream_http_status,
+                    upstream_rate_limited = classification.upstream_rate_limited,
                     "failed to query order quotes"
                 );
                 Err(ApiError::Internal("failed to query order quotes".into()))
@@ -151,7 +204,7 @@ pub fn routes() -> Vec<Route> {
 
 #[cfg(test)]
 pub(crate) mod test_fixtures {
-    use super::OrdersListDataSource;
+    use super::{OrderQuotesResult, OrdersListDataSource};
     use crate::error::ApiError;
     use async_trait::async_trait;
     use rain_orderbook_common::raindex_client::order_quotes::RaindexOrderQuote;
@@ -180,11 +233,32 @@ pub(crate) mod test_fixtures {
         async fn get_order_quotes(
             &self,
             _order: &RaindexOrder,
-        ) -> Result<Vec<RaindexOrderQuote>, ApiError> {
+        ) -> Result<OrderQuotesResult, ApiError> {
             match &self.quotes {
-                Ok(quotes) => Ok(quotes.clone()),
+                Ok(quotes) => Ok(OrderQuotesResult {
+                    quotes: quotes.clone(),
+                    duration_ms: 0,
+                }),
                 Err(_) => Err(ApiError::Internal("failed to query order quotes".into())),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_http_status;
+
+    #[test]
+    fn test_extract_http_status_finds_429() {
+        assert_eq!(
+            extract_http_status("rpc provider returned status 429 too many requests"),
+            Some(429)
+        );
+    }
+
+    #[test]
+    fn test_extract_http_status_ignores_non_http_codes() {
+        assert_eq!(extract_http_status("rpc error -32090 rate limited"), None);
     }
 }

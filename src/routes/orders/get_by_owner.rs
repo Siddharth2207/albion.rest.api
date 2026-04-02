@@ -40,7 +40,8 @@ pub(crate) async fn process_get_orders_by_owner(
     let mut summaries = Vec::with_capacity(orders.len());
     for (order, quotes_result) in orders.iter().zip(quote_results) {
         let io_ratio = match quotes_result {
-            Ok(quotes) => quotes
+            Ok(quotes_result) => quotes_result
+                .quotes
                 .first()
                 .and_then(|q| q.data.as_ref())
                 .map(|d| d.formatted_ratio.clone())

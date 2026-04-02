@@ -1,6 +1,6 @@
 use super::{
-    build_order_summary, build_pagination, OrdersListDataSource, RaindexOrdersListDataSource,
-    DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
+    build_order_summary, build_pagination, OrderQuotesResult, OrdersListDataSource,
+    RaindexOrdersListDataSource, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
 };
 use crate::auth::AuthenticatedKey;
 use crate::error::{ApiError, ApiErrorResponse};
@@ -15,6 +15,17 @@ use rocket::serde::json::Json;
 use rocket::State;
 use std::time::Instant;
 use tracing::Instrument;
+
+fn percentile_ms(sorted_durations_ms: &[u128], percentile: usize) -> u128 {
+    if sorted_durations_ms.is_empty() {
+        return 0;
+    }
+
+    let last_index = sorted_durations_ms.len() - 1;
+    let percentile = percentile.min(100);
+    let rank = (last_index * percentile) / 100;
+    sorted_durations_ms[rank]
+}
 
 pub(crate) async fn process_get_orders_by_token(
     ds: &dyn OrdersListDataSource,
@@ -65,19 +76,26 @@ pub(crate) async fn process_get_orders_by_token(
     let mut quote_success_count: usize = 0;
     let mut quote_empty_count: usize = 0;
     let mut quote_error_count: usize = 0;
+    let mut quote_duration_samples_ms = Vec::with_capacity(orders.len());
     for (order, quotes_result) in orders.iter().zip(quote_results) {
         let io_ratio = match quotes_result {
-            Ok(quotes) => quotes
-                .first()
-                .and_then(|q| q.data.as_ref())
-                .map(|d| {
-                    quote_success_count += 1;
-                    d.formatted_ratio.clone()
-                })
-                .unwrap_or_else(|| {
-                    quote_empty_count += 1;
-                    "-".into()
-                }),
+            Ok(OrderQuotesResult {
+                quotes,
+                duration_ms,
+            }) => {
+                quote_duration_samples_ms.push(duration_ms);
+                quotes
+                    .first()
+                    .and_then(|q| q.data.as_ref())
+                    .map(|d| {
+                        quote_success_count += 1;
+                        d.formatted_ratio.clone()
+                    })
+                    .unwrap_or_else(|| {
+                        quote_empty_count += 1;
+                        "-".into()
+                    })
+            }
             Err(err) => {
                 quote_error_count += 1;
                 tracing::warn!(
@@ -91,6 +109,18 @@ pub(crate) async fn process_get_orders_by_token(
         summaries.push(build_order_summary(order, &io_ratio)?);
     }
 
+    quote_duration_samples_ms.sort_unstable();
+    let quote_duration_count = quote_duration_samples_ms.len();
+    let quote_duration_min_ms = quote_duration_samples_ms.first().copied().unwrap_or(0);
+    let quote_duration_max_ms = quote_duration_samples_ms.last().copied().unwrap_or(0);
+    let quote_duration_p50_ms = percentile_ms(&quote_duration_samples_ms, 50);
+    let quote_duration_p95_ms = percentile_ms(&quote_duration_samples_ms, 95);
+    let quote_duration_avg_ms = if quote_duration_samples_ms.is_empty() {
+        0
+    } else {
+        quote_duration_samples_ms.iter().sum::<u128>() / quote_duration_samples_ms.len() as u128
+    };
+
     let pagination = build_pagination(total_count, page_num.into(), effective_page_size.into());
     tracing::info!(
         page = page_num,
@@ -100,6 +130,12 @@ pub(crate) async fn process_get_orders_by_token(
         quote_success_count,
         quote_empty_count,
         quote_error_count,
+        quote_duration_count,
+        quote_duration_min_ms,
+        quote_duration_avg_ms,
+        quote_duration_p50_ms,
+        quote_duration_p95_ms,
+        quote_duration_max_ms,
         orders_stage_duration_ms,
         quotes_stage_duration_ms,
         total_duration_ms = total_start.elapsed().as_millis(),
@@ -257,6 +293,20 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.orders[0].io_ratio, "-");
+    }
+
+    #[test]
+    fn test_percentile_ms_empty() {
+        assert_eq!(percentile_ms(&[], 95), 0);
+    }
+
+    #[test]
+    fn test_percentile_ms_uses_sorted_rank() {
+        let samples = [10_u128, 20, 30, 40, 50];
+        assert_eq!(percentile_ms(&samples, 0), 10);
+        assert_eq!(percentile_ms(&samples, 50), 30);
+        assert_eq!(percentile_ms(&samples, 95), 40);
+        assert_eq!(percentile_ms(&samples, 100), 50);
     }
 
     #[rocket::async_test]
