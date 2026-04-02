@@ -77,7 +77,7 @@ Optional overrides (defaults shown):
 ```hcl
 ssh_key_name   = "albion-deployments"   # Name of your SSH key in DigitalOcean
 region         = "nyc3"       # DigitalOcean region slug
-droplet_size   = "s-2vcpu-4gb"
+droplet_size   = "s-4vcpu-8gb-amd"
 volume_size_gb = 5
 ```
 
