@@ -13,7 +13,7 @@ Paginated list of trades associated with a wallet address.
 ### Request
 
 ```bash
-curl "https://api.st0x.io/v1/trades/0xYourAddress?page=1&pageSize=20" \
+curl "https://api.albion.rest/v1/trades/0xYourAddress?page=1&pageSize=20" \
   -H "Authorization: Basic <credentials>"
 ```
 
@@ -55,7 +55,7 @@ curl "https://api.st0x.io/v1/trades/0xYourAddress?page=1&pageSize=20" \
 To get trades within a specific window:
 
 ```bash
-curl "https://api.st0x.io/v1/trades/0xYourAddress?startTime=1708000000&endTime=1708100000" \
+curl "https://api.albion.rest/v1/trades/0xYourAddress?startTime=1708000000&endTime=1708100000" \
   -H "Authorization: Basic <credentials>"
 ```
 
@@ -70,7 +70,7 @@ Detailed breakdown of all trades within a specific transaction, including per-tr
 ### Request
 
 ```bash
-curl https://api.st0x.io/v1/trades/tx/0xTxHash... \
+curl https://api.albion.rest/v1/trades/tx/0xTxHash... \
   -H "Authorization: Basic <credentials>"
 ```
 

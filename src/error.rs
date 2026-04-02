@@ -35,6 +35,8 @@ pub enum ApiError {
     Internal(String),
     #[error("Rate limited: {0}")]
     RateLimited(String),
+    #[error("Not yet indexed: {0}")]
+    NotYetIndexed(String),
 }
 
 impl<'r> Responder<'r, 'static> for ApiError {
@@ -46,6 +48,7 @@ impl<'r> Responder<'r, 'static> for ApiError {
             ApiError::NotFound(msg) => (Status::NotFound, "NOT_FOUND", msg.clone()),
             ApiError::Internal(msg) => (Status::InternalServerError, "INTERNAL_ERROR", msg.clone()),
             ApiError::RateLimited(msg) => (Status::TooManyRequests, "RATE_LIMITED", msg.clone()),
+            ApiError::NotYetIndexed(msg) => (Status::Accepted, "NOT_YET_INDEXED", msg.clone()),
         };
         let span = request_span_for(req);
         span.in_scope(|| {
@@ -55,6 +58,13 @@ impl<'r> Responder<'r, 'static> for ApiError {
                     code = %code,
                     error_message = %message,
                     "request failed"
+                );
+            } else if matches!(self, ApiError::NotYetIndexed(_)) {
+                tracing::info!(
+                    status = status.code,
+                    code = %code,
+                    error_message = %message,
+                    "request pending indexing"
                 );
             } else {
                 tracing::warn!(
@@ -112,11 +122,23 @@ mod tests {
     fn internal() -> Result<(), ApiError> {
         Err(ApiError::Internal("something broke".into()))
     }
+    #[get("/not-yet-indexed")]
+    fn not_yet_indexed() -> Result<(), ApiError> {
+        Err(ApiError::NotYetIndexed(
+            "transaction is still indexing".into(),
+        ))
+    }
 
     fn error_client() -> Client {
         let rocket = rocket::build().mount(
             "/",
-            rocket::routes![bad_request, unauthorized, not_found, internal],
+            rocket::routes![
+                bad_request,
+                unauthorized,
+                not_found,
+                internal,
+                not_yet_indexed
+            ],
         );
         Client::tracked(rocket).expect("valid rocket instance")
     }
@@ -164,6 +186,18 @@ mod tests {
             500,
             "INTERNAL_ERROR",
             "something broke",
+        );
+    }
+
+    #[test]
+    fn test_not_yet_indexed_returns_202() {
+        let client = error_client();
+        assert_error_response(
+            &client,
+            "/not-yet-indexed",
+            202,
+            "NOT_YET_INDEXED",
+            "transaction is still indexing",
         );
     }
 }
