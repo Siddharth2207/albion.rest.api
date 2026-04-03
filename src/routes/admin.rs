@@ -1,4 +1,5 @@
 use crate::auth::AdminKey;
+use crate::cache::CacheGroup;
 use crate::db::{settings, DbPool};
 use crate::error::{ApiError, ApiErrorResponse};
 use crate::fairings::{GlobalRateLimit, TracingSpan};
@@ -35,6 +36,7 @@ pub async fn put_registry(
     _admin: AdminKey,
     shared_raindex: &State<SharedRaindexProvider>,
     pool: &State<DbPool>,
+    registry_caches: &State<CacheGroup>,
     span: TracingSpan,
     request: Json<UpdateRegistryRequest>,
 ) -> Result<Json<RegistryResponse>, ApiError> {
@@ -71,8 +73,9 @@ pub async fn put_registry(
 
         *guard = new_provider;
         drop(guard);
+        registry_caches.invalidate_all();
 
-        tracing::info!(registry_url = %req.registry_url, "registry updated");
+        tracing::info!(registry_url = %req.registry_url, "registry updated and caches invalidated");
 
         Ok(Json(RegistryResponse {
             registry_url: req.registry_url,
@@ -229,5 +232,92 @@ mod tests {
             .await;
 
         assert_eq!(response.status(), Status::BadRequest);
+    }
+
+    #[rocket::async_test]
+    async fn test_put_registry_invalidates_caches() {
+        use crate::routes::order::OrderDetailCache;
+        use crate::routes::swap::SwapQuoteCache;
+        use crate::types::common::TokenRef;
+        use crate::types::order::{OrderDetail, OrderDetailsInfo, OrderType};
+        use crate::types::swap::SwapQuoteResponse;
+        use alloy::primitives::{address, Address, U256};
+
+        let client = TestClientBuilder::new().build().await;
+        let (key_id, secret) = seed_admin_key(&client).await;
+        let header = basic_auth_header(&key_id, &secret);
+
+        let order_hash = "0x000000000000000000000000000000000000000000000000000000000000abcd"
+            .parse()
+            .expect("valid order hash");
+        let order_cache = client
+            .rocket()
+            .state::<OrderDetailCache>()
+            .expect("OrderDetailCache in state");
+        order_cache
+            .insert(
+                order_hash,
+                OrderDetail {
+                    order_hash,
+                    owner: Address::ZERO,
+                    order_details: OrderDetailsInfo {
+                        type_: OrderType::Solver,
+                        io_ratio: "1.0".into(),
+                    },
+                    input_token: TokenRef {
+                        address: Address::ZERO,
+                        symbol: "USDC".into(),
+                        decimals: 6,
+                    },
+                    output_token: TokenRef {
+                        address: Address::ZERO,
+                        symbol: "WETH".into(),
+                        decimals: 18,
+                    },
+                    input_vault_id: U256::ZERO,
+                    output_vault_id: U256::ZERO,
+                    input_vault_balance: "0".into(),
+                    output_vault_balance: "0".into(),
+                    io_ratio: "1.0".into(),
+                    created_at: 0,
+                    orderbook_id: Address::ZERO,
+                    trades: vec![],
+                },
+            )
+            .await;
+
+        let swap_cache = client
+            .rocket()
+            .state::<SwapQuoteCache>()
+            .expect("SwapQuoteCache in state");
+        let usdc = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
+        let weth = address!("4200000000000000000000000000000000000006");
+        swap_cache
+            .insert(
+                (usdc, weth, "100".into()),
+                SwapQuoteResponse {
+                    input_token: usdc,
+                    output_token: weth,
+                    output_amount: "100".into(),
+                    estimated_output: "100".into(),
+                    estimated_input: "250".into(),
+                    estimated_io_ratio: "2.5".into(),
+                },
+            )
+            .await;
+
+        let new_url = mock_raindex_registry_url().await;
+        let response = client
+            .put("/admin/registry")
+            .header(Header::new("Authorization", header))
+            .header(ContentType::JSON)
+            .body(format!(r#"{{"registry_url":"{new_url}"}}"#))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::Ok);
+        tokio::task::yield_now().await;
+        assert!(order_cache.get(&order_hash).await.is_none());
+        assert!(swap_cache.get(&(usdc, weth, "100".into())).await.is_none());
     }
 }
