@@ -52,10 +52,33 @@ in {
         ++ [ deploy-rs.packages.${localSystem}.deploy-rs ];
 
       deployPreamble = ''
+        ${infraPkgs.parseIdentity}
         if [ -n "''${DEPLOY_HOST:-}" ]; then
           host_ip="$DEPLOY_HOST"
         else
-          ${infraPkgs.resolveIp}
+          trap 'rm -f infra/terraform.tfstate' EXIT
+          if [ -f infra/terraform.tfstate.age ]; then
+            if ! rage -d -i "$identity" infra/terraform.tfstate.age > infra/terraform.tfstate; then
+              echo "Failed to decrypt infra/terraform.tfstate.age with identity $identity" >&2
+              exit 1
+            fi
+          elif [ ! -f infra/terraform.tfstate ]; then
+            echo "Neither infra/terraform.tfstate.age nor infra/terraform.tfstate exists; cannot resolve host IP" >&2
+            exit 1
+          fi
+
+          host_ip=$(jq -r '.outputs.droplet_ipv4.value // empty' infra/terraform.tfstate 2>/dev/null || true)
+          if [ -z "$host_ip" ]; then
+            outputs=$(jq -r '.outputs | keys | join(\",\")' infra/terraform.tfstate 2>/dev/null || echo "<unreadable>")
+            echo "Unable to find outputs.droplet_ipv4.value in terraform state (available outputs: $outputs)" >&2
+            exit 1
+          fi
+
+          if ! echo "$host_ip" | grep -Eq '^([0-9]{1,3}\\.){3}[0-9]{1,3}$'; then
+            echo "Resolved host IP is not valid IPv4: '$host_ip'" >&2
+            exit 1
+          fi
+
           export DEPLOY_HOST="$host_ip"
         fi
         export NIX_SSHOPTS="-i $identity"
