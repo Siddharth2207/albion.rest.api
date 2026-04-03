@@ -1,4 +1,4 @@
-use super::{OrderDataSource, RaindexOrderDataSource};
+use super::{OrderDataSource, OrderDetailCache, RaindexOrderDataSource};
 use crate::auth::AuthenticatedKey;
 use crate::error::{ApiError, ApiErrorResponse};
 use crate::fairings::{GlobalRateLimit, TracingSpan};
@@ -33,17 +33,23 @@ pub async fn get_order(
     _global: GlobalRateLimit,
     _key: AuthenticatedKey,
     shared_raindex: &State<crate::raindex::SharedRaindexProvider>,
+    order_cache: &State<OrderDetailCache>,
     span: TracingSpan,
     order_hash: ValidatedFixedBytes,
 ) -> Result<Json<OrderDetail>, ApiError> {
     async move {
         tracing::info!(order_hash = ?order_hash, "request received");
         let hash = order_hash.0;
-        let raindex = shared_raindex.read().await;
-        let ds = RaindexOrderDataSource {
-            client: raindex.client(),
-        };
-        let detail = process_get_order(&ds, hash).await?;
+        let detail = order_cache
+            .get_or_try_insert(hash, || async {
+                let raindex = shared_raindex.read().await;
+                let ds = RaindexOrderDataSource {
+                    client: raindex.client(),
+                };
+                process_get_order(&ds, hash).await
+            })
+            .await
+            .map_err(ApiError::from)?;
         Ok(Json(detail))
     }
     .instrument(span.0)
@@ -139,9 +145,9 @@ mod tests {
     use super::*;
     use crate::error::ApiError;
     use crate::routes::order::test_fixtures::*;
-    use crate::test_helpers::TestClientBuilder;
-    use alloy::primitives::{Address, Bytes};
-    use rocket::http::Status;
+    use crate::test_helpers::{basic_auth_header, seed_api_key, TestClientBuilder};
+    use alloy::primitives::{Address, Bytes, U256};
+    use rocket::http::{Header, Status};
 
     #[rocket::async_test]
     async fn test_process_get_order_success() {
@@ -281,5 +287,61 @@ mod tests {
             .dispatch()
             .await;
         assert_eq!(response.status(), Status::Unauthorized);
+    }
+
+    #[rocket::async_test]
+    async fn test_get_order_returns_cached_entry() {
+        let client = TestClientBuilder::new().build().await;
+        let (key_id, secret) = seed_api_key(&client).await;
+        let header = basic_auth_header(&key_id, &secret);
+        let order_hash = test_hash();
+
+        let order_cache = client
+            .rocket()
+            .state::<OrderDetailCache>()
+            .expect("OrderDetailCache in state");
+        order_cache
+            .insert(
+                order_hash,
+                OrderDetail {
+                    order_hash,
+                    owner: Address::ZERO,
+                    order_details: OrderDetailsInfo {
+                        type_: OrderType::Solver,
+                        io_ratio: "1.0".into(),
+                    },
+                    input_token: TokenRef {
+                        address: Address::ZERO,
+                        symbol: "USDC".into(),
+                        decimals: 6,
+                    },
+                    output_token: TokenRef {
+                        address: Address::ZERO,
+                        symbol: "WETH".into(),
+                        decimals: 18,
+                    },
+                    input_vault_id: U256::ZERO,
+                    output_vault_id: U256::ZERO,
+                    input_vault_balance: "0".into(),
+                    output_vault_balance: "0".into(),
+                    io_ratio: "1.0".into(),
+                    created_at: 0,
+                    orderbook_id: Address::ZERO,
+                    trades: vec![],
+                },
+            )
+            .await;
+
+        let response = client
+            .get(format!("/v1/order/{order_hash:#066x}"))
+            .header(Header::new("Authorization", header))
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::Ok);
+        let body: serde_json::Value =
+            serde_json::from_str(&response.into_string().await.unwrap()).unwrap();
+        assert_eq!(body["orderHash"], format!("{order_hash:#066x}"));
+        assert_eq!(body["ioRatio"], "1.0");
     }
 }
