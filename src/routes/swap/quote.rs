@@ -1,4 +1,4 @@
-use super::{RaindexSwapDataSource, SwapDataSource};
+use super::{RaindexSwapDataSource, SwapDataSource, SwapQuoteCache};
 use crate::auth::AuthenticatedKey;
 use crate::error::{ApiError, ApiErrorResponse};
 use crate::fairings::{GlobalRateLimit, TracingSpan};
@@ -30,17 +30,24 @@ pub async fn post_swap_quote(
     _global: GlobalRateLimit,
     _key: AuthenticatedKey,
     shared_raindex: &State<crate::raindex::SharedRaindexProvider>,
+    swap_cache: &State<SwapQuoteCache>,
     span: TracingSpan,
     request: Json<SwapQuoteRequest>,
 ) -> Result<Json<SwapQuoteResponse>, ApiError> {
     let req = request.into_inner();
     async move {
         tracing::info!(body = ?req, "request received");
-        let raindex = shared_raindex.read().await;
-        let ds = RaindexSwapDataSource {
-            client: raindex.client(),
-        };
-        let response = process_swap_quote(&ds, req).await?;
+        let cache_key = (req.input_token, req.output_token, req.output_amount.clone());
+        let response = swap_cache
+            .get_or_try_insert(cache_key, || async {
+                let raindex = shared_raindex.read().await;
+                let ds = RaindexSwapDataSource {
+                    client: raindex.client(),
+                };
+                process_swap_quote(&ds, req).await
+            })
+            .await
+            .map_err(ApiError::from)?;
         Ok(Json(response))
     }
     .instrument(span.0)
@@ -122,9 +129,11 @@ async fn process_swap_quote(
 mod tests {
     use super::*;
     use crate::routes::swap::test_fixtures::MockSwapDataSource;
-    use crate::test_helpers::{mock_candidate, mock_order, TestClientBuilder};
+    use crate::test_helpers::{
+        basic_auth_header, mock_candidate, mock_order, seed_api_key, TestClientBuilder,
+    };
     use alloy::primitives::address;
-    use rocket::http::{ContentType, Status};
+    use rocket::http::{ContentType, Header, Status};
 
     const USDC: alloy::primitives::Address = address!("833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
     const WETH: alloy::primitives::Address = address!("4200000000000000000000000000000000000006");
@@ -254,5 +263,41 @@ mod tests {
             .dispatch()
             .await;
         assert_eq!(response.status(), Status::Unauthorized);
+    }
+
+    #[rocket::async_test]
+    async fn test_swap_quote_returns_cached_entry() {
+        let client = TestClientBuilder::new().build().await;
+        let (key_id, secret) = seed_api_key(&client).await;
+        let header = basic_auth_header(&key_id, &secret);
+
+        let dummy = SwapQuoteResponse {
+            input_token: USDC,
+            output_token: WETH,
+            output_amount: "100".into(),
+            estimated_output: "100".into(),
+            estimated_input: "250".into(),
+            estimated_io_ratio: "2.5".into(),
+        };
+
+        let swap_cache = client
+            .rocket()
+            .state::<SwapQuoteCache>()
+            .expect("SwapQuoteCache in state");
+        swap_cache.insert((USDC, WETH, "100".into()), dummy).await;
+
+        let response = client
+            .post("/v1/swap/quote")
+            .header(Header::new("Authorization", header))
+            .header(ContentType::JSON)
+            .body(r#"{"inputToken":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","outputToken":"0x4200000000000000000000000000000000000006","outputAmount":"100"}"#)
+            .dispatch()
+            .await;
+
+        assert_eq!(response.status(), Status::Ok);
+        let body: serde_json::Value =
+            serde_json::from_str(&response.into_string().await.unwrap()).unwrap();
+        assert_eq!(body["estimatedIoRatio"], "2.5");
+        assert_eq!(body["estimatedInput"], "250");
     }
 }
