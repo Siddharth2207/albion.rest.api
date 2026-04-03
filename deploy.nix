@@ -52,8 +52,12 @@ in {
         ++ [ deploy-rs.packages.${localSystem}.deploy-rs ];
 
       deployPreamble = ''
-        ${infraPkgs.resolveIp}
-        export DEPLOY_HOST="$host_ip"
+        if [ -n "''${DEPLOY_HOST:-}" ]; then
+          host_ip="$DEPLOY_HOST"
+        else
+          ${infraPkgs.resolveIp}
+          export DEPLOY_HOST="$host_ip"
+        fi
         export NIX_SSHOPTS="-i $identity"
         ssh_flag="--ssh-opts=-i $identity"
       '';

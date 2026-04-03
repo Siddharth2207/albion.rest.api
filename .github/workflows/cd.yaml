@@ -1,6 +1,9 @@
 name: Deploy
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -85,4 +88,6 @@ jobs:
       - run: ./prep.sh
 
       - name: Build and deploy
+        env:
+          DEPLOY_HOST: ${{ env.HOST_IP }}
         run: nix run .#deployService -- rest-api
