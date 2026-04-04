@@ -18,6 +18,7 @@ use rocket::{Route, State};
 use std::cmp::Reverse;
 use std::ops::{Add, Div, Sub};
 use std::str::FromStr;
+use std::time::Instant;
 use tracing::Instrument;
 
 const ORDERS_SCAN_PAGE_SIZE: u16 = 50;
@@ -28,6 +29,11 @@ const FAST_INDEX_CHECK_INTERVAL_MS: u64 = 0;
 enum TxIndexState {
     Indexed,
     NotYetIndexed,
+}
+
+struct TradeWithOwner {
+    owner: Address,
+    trade: RaindexTrade,
 }
 
 #[async_trait]
@@ -45,6 +51,16 @@ trait TradesDataSource: Send + Sync {
         start_time: Option<u64>,
         end_time: Option<u64>,
     ) -> Result<Vec<RaindexTrade>, ApiError>;
+
+    async fn get_trades_by_tx(&self, tx_hash: B256) -> Result<Vec<TradeWithOwner>, ApiError> {
+        let all_orders = fetch_all_orders(self, GetOrdersFilters::default()).await?;
+        let trades_with_owner = load_trades_with_owners(self, &all_orders, None, None).await?;
+
+        Ok(trades_with_owner
+            .into_iter()
+            .filter(|trade_with_owner| trade_with_owner.trade.transaction().id() == tx_hash)
+            .collect())
+    }
 
     async fn check_tx_index_state(&self, tx_hash: B256) -> Result<TxIndexState, ApiError>;
 }
@@ -85,6 +101,51 @@ impl TradesDataSource for RaindexTradesDataSource<'_> {
                 tracing::error!(error = %e, order_hash = ?order.order_hash(), "failed to query order trades");
                 ApiError::Internal("failed to query order trades".into())
             })
+    }
+
+    async fn get_trades_by_tx(&self, tx_hash: B256) -> Result<Vec<TradeWithOwner>, ApiError> {
+        let started = Instant::now();
+        let orderbooks = self.client.get_all_orderbooks().map_err(|e| {
+            tracing::error!(error = %e, "failed to get orderbooks");
+            ApiError::Internal("failed to query trades".into())
+        })?;
+
+        let lookups: Vec<_> = orderbooks
+            .values()
+            .map(|orderbook| (orderbook.network.chain_id, orderbook.address))
+            .collect();
+
+        let trade_results = join_all(lookups.iter().map(
+            |(chain_id, orderbook_address)| async move {
+                self.client
+                    .get_transaction_trades(*chain_id, *orderbook_address, tx_hash)
+                    .await
+            },
+        ))
+        .await;
+
+        let mut matching_trades = Vec::new();
+        for trade_result in trade_results {
+            let trades = trade_result.map_err(|e| {
+                tracing::error!(error = %e, tx_hash = %tx_hash, "failed to query transaction trades");
+                ApiError::Internal("failed to query trades".into())
+            })?;
+
+            matching_trades.extend(trades.into_iter().map(|trade_with_owner| TradeWithOwner {
+                owner: trade_with_owner.order_owner,
+                trade: trade_with_owner.trade,
+            }));
+        }
+
+        tracing::info!(
+            tx_hash = %tx_hash,
+            orderbook_count = lookups.len(),
+            direct_lookup_trade_count = matching_trades.len(),
+            direct_lookup_duration_ms = started.elapsed().as_millis() as u64,
+            "resolved transaction trades via direct lookup"
+        );
+
+        Ok(matching_trades)
     }
 
     async fn check_tx_index_state(&self, tx_hash: B256) -> Result<TxIndexState, ApiError> {
@@ -186,8 +247,8 @@ fn compute_io_ratio(input_amount: Float, output_amount: Float) -> Result<String,
     format_float(ratio, "io ratio")
 }
 
-async fn fetch_all_orders(
-    ds: &dyn TradesDataSource,
+async fn fetch_all_orders<T: TradesDataSource + ?Sized>(
+    ds: &T,
     filters: GetOrdersFilters,
 ) -> Result<Vec<RaindexOrder>, ApiError> {
     let mut all_orders = Vec::new();
@@ -214,13 +275,8 @@ async fn fetch_all_orders(
     Ok(all_orders)
 }
 
-struct TradeWithOwner {
-    owner: Address,
-    trade: RaindexTrade,
-}
-
-async fn load_trades_with_owners(
-    ds: &dyn TradesDataSource,
+async fn load_trades_with_owners<T: TradesDataSource + ?Sized>(
+    ds: &T,
     orders: &[RaindexOrder],
     start_time: Option<u64>,
     end_time: Option<u64>,
@@ -247,24 +303,31 @@ async fn process_get_trades_by_tx(
     ds: &dyn TradesDataSource,
     tx_hash: B256,
 ) -> Result<Json<TradesByTxResponse>, ApiError> {
-    let all_orders = fetch_all_orders(ds, GetOrdersFilters::default()).await?;
-    let trades_with_owner = load_trades_with_owners(ds, &all_orders, None, None).await?;
-
-    let mut matching_trades = Vec::new();
-    for trade_with_owner in trades_with_owner {
-        if trade_with_owner.trade.transaction().id() == tx_hash {
-            matching_trades.push(trade_with_owner);
-        }
-    }
+    let lookup_started = Instant::now();
+    let matching_trades = ds.get_trades_by_tx(tx_hash).await?;
+    let lookup_duration_ms = lookup_started.elapsed().as_millis() as u64;
 
     if matching_trades.is_empty() {
+        let index_check_started = Instant::now();
         match ds.check_tx_index_state(tx_hash).await? {
             TxIndexState::NotYetIndexed => {
+                tracing::info!(
+                    tx_hash = %tx_hash,
+                    tx_lookup_duration_ms = lookup_duration_ms,
+                    index_check_duration_ms = index_check_started.elapsed().as_millis() as u64,
+                    "transaction trades lookup found no indexed results yet"
+                );
                 return Err(ApiError::NotYetIndexed(format!(
                     "transaction {tx_hash:#x} not yet indexed"
                 )));
             }
             TxIndexState::Indexed => {
+                tracing::info!(
+                    tx_hash = %tx_hash,
+                    tx_lookup_duration_ms = lookup_duration_ms,
+                    index_check_duration_ms = index_check_started.elapsed().as_millis() as u64,
+                    "transaction trades lookup found no matching trades"
+                );
                 return Err(ApiError::NotFound(
                     "transaction has no associated trades".into(),
                 ));
@@ -334,6 +397,7 @@ async fn process_get_trades_by_tx(
     tracing::info!(
         tx_hash = %tx_hash,
         trade_count = entries.len(),
+        tx_lookup_duration_ms = lookup_duration_ms,
         "resolved trades by tx"
     );
 
