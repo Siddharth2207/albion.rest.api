@@ -123,18 +123,30 @@ pub(crate) fn rocket(
 
     let options = Options::Index | Options::NormalizeDirs;
     let order_cache = routes::order::order_detail_cache();
+    let orders_by_owner_cache = routes::orders::orders_by_owner_cache();
+    let orders_by_token_cache = routes::orders::orders_by_token_cache();
     let swap_cache = routes::swap::swap_quote_cache();
+    let trades_by_address_cache = routes::trades::trades_by_address_cache();
+    let trades_by_tx_cache = routes::trades::trades_by_tx_cache();
 
     let mut registry_caches = cache::CacheGroup::new();
     registry_caches.register(&order_cache);
+    registry_caches.register(&orders_by_owner_cache);
+    registry_caches.register(&orders_by_token_cache);
     registry_caches.register(&swap_cache);
+    registry_caches.register(&trades_by_address_cache);
+    registry_caches.register(&trades_by_tx_cache);
 
     Ok(rocket::custom(figment)
         .manage(pool)
         .manage(rate_limiter)
         .manage(raindex_config)
         .manage(order_cache)
+        .manage(orders_by_owner_cache)
+        .manage(orders_by_token_cache)
         .manage(swap_cache)
+        .manage(trades_by_address_cache)
+        .manage(trades_by_tx_cache)
         .manage(registry_caches)
         .mount("/", routes::health::routes())
         .mount("/v1/tokens", routes::tokens::routes())

@@ -1,4 +1,5 @@
 use crate::auth::AuthenticatedKey;
+use crate::cache::AppCache;
 use crate::error::{ApiError, ApiErrorResponse};
 use crate::fairings::{GlobalRateLimit, TracingSpan};
 use crate::types::common::{TokenRef, ValidatedAddress, ValidatedFixedBytes};
@@ -18,12 +19,28 @@ use rocket::{Route, State};
 use std::cmp::Reverse;
 use std::ops::{Add, Div, Sub};
 use std::str::FromStr;
+use std::time::Duration;
 use std::time::Instant;
 use tracing::Instrument;
 
 const ORDERS_SCAN_PAGE_SIZE: u16 = 50;
 const FAST_INDEX_CHECK_ATTEMPTS: usize = 1;
 const FAST_INDEX_CHECK_INTERVAL_MS: u64 = 0;
+const TRADES_BY_ADDRESS_CACHE_TTL: Duration = Duration::from_secs(10);
+const TRADES_BY_TX_CACHE_TTL: Duration = Duration::from_secs(300);
+const TRADES_CACHE_CAPACITY: u64 = 1_000;
+
+type TradesByAddressCache =
+    AppCache<(Address, u32, u32, Option<u64>, Option<u64>), TradesByAddressResponse>;
+type TradesByTxCache = AppCache<B256, TradesByTxResponse>;
+
+pub(crate) fn trades_by_address_cache() -> TradesByAddressCache {
+    AppCache::new(TRADES_CACHE_CAPACITY, TRADES_BY_ADDRESS_CACHE_TTL)
+}
+
+pub(crate) fn trades_by_tx_cache() -> TradesByTxCache {
+    AppCache::new(TRADES_CACHE_CAPACITY, TRADES_BY_TX_CACHE_TTL)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TxIndexState {
@@ -302,7 +319,7 @@ async fn load_trades_with_owners<T: TradesDataSource + ?Sized>(
 async fn process_get_trades_by_tx(
     ds: &dyn TradesDataSource,
     tx_hash: B256,
-) -> Result<Json<TradesByTxResponse>, ApiError> {
+) -> Result<TradesByTxResponse, ApiError> {
     let lookup_started = Instant::now();
     let matching_trades = ds.get_trades_by_tx(tx_hash).await?;
     let lookup_duration_ms = lookup_started.elapsed().as_millis() as u64;
@@ -401,7 +418,7 @@ async fn process_get_trades_by_tx(
         "resolved trades by tx"
     );
 
-    Ok(Json(TradesByTxResponse {
+    Ok(TradesByTxResponse {
         tx_hash,
         block_number: to_u64(first_tx.block_number(), "block number")?,
         timestamp: to_u64(first_tx.timestamp(), "timestamp")?,
@@ -412,14 +429,14 @@ async fn process_get_trades_by_tx(
             total_output_amount: format_float(total_output, "trade totals")?,
             average_io_ratio: format_float(average_io_ratio, "trade totals")?,
         },
-    }))
+    })
 }
 
 async fn process_get_trades_by_address(
     ds: &dyn TradesDataSource,
     owner: Address,
     params: TradesPaginationParams,
-) -> Result<Json<TradesByAddressResponse>, ApiError> {
+) -> Result<TradesByAddressResponse, ApiError> {
     let all_orders = fetch_all_orders(
         ds,
         GetOrdersFilters {
@@ -488,7 +505,7 @@ async fn process_get_trades_by_address(
         "resolved trades by address"
     );
 
-    Ok(Json(TradesByAddressResponse {
+    Ok(TradesByAddressResponse {
         trades: paginated,
         pagination: TradesPagination {
             page,
@@ -497,7 +514,41 @@ async fn process_get_trades_by_address(
             total_pages,
             has_more: u64::from(page) < total_pages,
         },
-    }))
+    })
+}
+
+async fn get_cached_trades_by_tx(
+    cache: &TradesByTxCache,
+    ds: &dyn TradesDataSource,
+    tx_hash: B256,
+) -> Result<TradesByTxResponse, ApiError> {
+    cache
+        .get_or_try_insert(tx_hash, || async move {
+            process_get_trades_by_tx(ds, tx_hash).await
+        })
+        .await
+        .map_err(ApiError::from)
+}
+
+async fn get_cached_trades_by_address(
+    cache: &TradesByAddressCache,
+    ds: &dyn TradesDataSource,
+    owner: Address,
+    params: TradesPaginationParams,
+) -> Result<TradesByAddressResponse, ApiError> {
+    let cache_key = (
+        owner,
+        params.page.unwrap_or(1),
+        params.page_size.unwrap_or(20),
+        params.start_time,
+        params.end_time,
+    );
+    cache
+        .get_or_try_insert(cache_key, || async move {
+            process_get_trades_by_address(ds, owner, params).await
+        })
+        .await
+        .map_err(ApiError::from)
 }
 
 #[utoipa::path(
@@ -522,6 +573,7 @@ pub async fn get_trades_by_tx(
     _global: GlobalRateLimit,
     _key: AuthenticatedKey,
     shared_raindex: &State<crate::raindex::SharedRaindexProvider>,
+    trades_by_tx_cache: &State<TradesByTxCache>,
     span: TracingSpan,
     tx_hash: ValidatedFixedBytes,
 ) -> Result<Json<TradesByTxResponse>, ApiError> {
@@ -531,7 +583,8 @@ pub async fn get_trades_by_tx(
         let ds = RaindexTradesDataSource {
             client: raindex.client(),
         };
-        process_get_trades_by_tx(&ds, tx_hash.0).await
+        let response = get_cached_trades_by_tx(trades_by_tx_cache, &ds, tx_hash.0).await?;
+        Ok(Json(response))
     }
     .instrument(span.0)
     .await
@@ -559,6 +612,7 @@ pub async fn get_trades_by_address(
     _global: GlobalRateLimit,
     _key: AuthenticatedKey,
     shared_raindex: &State<crate::raindex::SharedRaindexProvider>,
+    trades_by_address_cache: &State<TradesByAddressCache>,
     span: TracingSpan,
     address: ValidatedAddress,
     params: TradesPaginationParams,
@@ -569,7 +623,9 @@ pub async fn get_trades_by_address(
         let ds = RaindexTradesDataSource {
             client: raindex.client(),
         };
-        process_get_trades_by_address(&ds, address.0, params).await
+        let response =
+            get_cached_trades_by_address(trades_by_address_cache, &ds, address.0, params).await?;
+        Ok(Json(response))
     }
     .instrument(span.0)
     .await
@@ -631,10 +687,7 @@ mod tests {
             tx_index_state: Ok(TxIndexState::Indexed),
         };
 
-        let response = process_get_trades_by_tx(&ds, tx_hash())
-            .await
-            .unwrap()
-            .into_inner();
+        let response = process_get_trades_by_tx(&ds, tx_hash()).await.unwrap();
 
         assert_eq!(response.trades.len(), 1);
         assert_eq!(response.block_number, 100);
@@ -678,13 +731,71 @@ mod tests {
             },
         )
         .await
-        .unwrap()
-        .into_inner();
+        .unwrap();
 
         assert_eq!(response.trades.len(), 1);
         assert_eq!(response.pagination.total_trades, 1);
         assert_eq!(response.pagination.total_pages, 1);
         assert!(!response.pagination.has_more);
+    }
+
+    #[rocket::async_test]
+    async fn test_get_cached_trades_by_tx_reuses_cached_response() {
+        let cache = trades_by_tx_cache();
+        let ds = MockTradesDataSource {
+            orders_result: Ok((vec![mock_order()], 1)),
+            trades_result: Ok(vec![mock_trade()]),
+            tx_index_state: Ok(TxIndexState::Indexed),
+        };
+
+        let first = get_cached_trades_by_tx(&cache, &ds, tx_hash())
+            .await
+            .unwrap();
+        let second = get_cached_trades_by_tx(&cache, &ds, tx_hash())
+            .await
+            .unwrap();
+
+        assert_eq!(first.trades.len(), 1);
+        assert_eq!(second.trades.len(), 1);
+        assert_eq!(cache.get(&tx_hash()).await.unwrap().trades.len(), 1);
+    }
+
+    #[rocket::async_test]
+    async fn test_get_cached_trades_by_address_reuses_cached_response() {
+        let cache = trades_by_address_cache();
+        let ds = MockTradesDataSource {
+            orders_result: Ok((vec![mock_order()], 1)),
+            trades_result: Ok(vec![mock_trade()]),
+            tx_index_state: Ok(TxIndexState::Indexed),
+        };
+        let owner: Address = "0x0000000000000000000000000000000000000001"
+            .parse()
+            .unwrap();
+        let params = TradesPaginationParams {
+            page: Some(1),
+            page_size: Some(20),
+            start_time: None,
+            end_time: None,
+        };
+
+        let first = get_cached_trades_by_address(&cache, &ds, owner, params.clone())
+            .await
+            .unwrap();
+        let second = get_cached_trades_by_address(&cache, &ds, owner, params.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(first.trades.len(), 1);
+        assert_eq!(second.trades.len(), 1);
+        assert_eq!(
+            cache
+                .get(&(owner, 1, 20, None, None))
+                .await
+                .unwrap()
+                .trades
+                .len(),
+            1
+        );
     }
 
     #[rocket::async_test]

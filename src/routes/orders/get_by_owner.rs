@@ -1,6 +1,6 @@
 use super::{
-    build_order_summary, build_pagination, OrdersListDataSource, RaindexOrdersListDataSource,
-    DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
+    build_order_summary, build_pagination, OrdersByOwnerCache, OrdersListDataSource,
+    RaindexOrdersListDataSource, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
 };
 use crate::auth::AuthenticatedKey;
 use crate::error::{ApiError, ApiErrorResponse};
@@ -12,6 +12,28 @@ use rain_orderbook_common::raindex_client::orders::GetOrdersFilters;
 use rocket::serde::json::Json;
 use rocket::State;
 use tracing::Instrument;
+
+async fn get_cached_orders_by_owner(
+    cache: &OrdersByOwnerCache,
+    ds: &dyn OrdersListDataSource,
+    address: Address,
+    page: Option<u16>,
+    page_size: Option<u16>,
+) -> Result<OrdersListResponse, ApiError> {
+    let page_num = page.unwrap_or(1);
+    let effective_page_size = page_size
+        .unwrap_or(DEFAULT_PAGE_SIZE as u16)
+        .min(MAX_PAGE_SIZE);
+    let cache_key = (address, page_num, effective_page_size);
+
+    cache
+        .get_or_try_insert(cache_key, || async move {
+            process_get_orders_by_owner(ds, address, Some(page_num), Some(effective_page_size))
+                .await
+        })
+        .await
+        .map_err(ApiError::from)
+}
 
 pub(crate) async fn process_get_orders_by_owner(
     ds: &dyn OrdersListDataSource,
@@ -89,6 +111,7 @@ pub async fn get_orders_by_address(
     _global: GlobalRateLimit,
     _key: AuthenticatedKey,
     shared_raindex: &State<crate::raindex::SharedRaindexProvider>,
+    orders_by_owner_cache: &State<OrdersByOwnerCache>,
     span: TracingSpan,
     address: ValidatedAddress,
     params: OrdersPaginationParams,
@@ -102,7 +125,8 @@ pub async fn get_orders_by_address(
         let ds = RaindexOrdersListDataSource {
             client: raindex.client(),
         };
-        let response = process_get_orders_by_owner(&ds, addr, page, page_size).await?;
+        let response =
+            get_cached_orders_by_owner(orders_by_owner_cache, &ds, addr, page, page_size).await?;
         Ok(Json(response))
     }
     .instrument(span.0)
@@ -115,6 +139,7 @@ mod tests {
     use crate::routes::order::test_fixtures::{
         mock_order, mock_order_with_shared_vaults, mock_quote,
     };
+    use crate::routes::orders::orders_by_owner_cache;
     use crate::routes::orders::test_fixtures::MockOrdersListDataSource;
     use crate::test_helpers::{basic_auth_header, seed_api_key, TestClientBuilder};
     use rocket::http::{Header, Status};
@@ -210,6 +235,33 @@ mod tests {
         assert_eq!(result.orders[0].input_token.symbol, "wtMSTR");
         assert_eq!(result.orders[0].output_token.symbol, "wtMSTR");
         assert_eq!(result.orders[0].io_ratio, "200.0");
+    }
+
+    #[rocket::async_test]
+    async fn test_get_cached_orders_by_owner_reuses_cached_response() {
+        let cache = orders_by_owner_cache();
+        let ds = MockOrdersListDataSource {
+            orders: Ok(vec![mock_order()]),
+            total_count: 1,
+            quotes: Ok(vec![mock_quote("1.5")]),
+        };
+        let addr: Address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+            .parse()
+            .unwrap();
+
+        let first = get_cached_orders_by_owner(&cache, &ds, addr, Some(1), Some(20))
+            .await
+            .unwrap();
+        let second = get_cached_orders_by_owner(&cache, &ds, addr, Some(1), Some(20))
+            .await
+            .unwrap();
+
+        assert_eq!(first.orders.len(), 1);
+        assert_eq!(second.orders.len(), 1);
+        assert_eq!(
+            cache.get(&(addr, 1, 20)).await.unwrap().orders[0].io_ratio,
+            "1.5"
+        );
     }
 
     #[rocket::async_test]
