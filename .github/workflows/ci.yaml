@@ -56,4 +56,4 @@ jobs:
       - uses: nixbuild/nix-quick-install-action@v30
 
       - name: Build docs
-        run: nix build .#st0x-docs
+        run: nix build .#albion-docs

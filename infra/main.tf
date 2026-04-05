@@ -4,7 +4,7 @@ data "digitalocean_ssh_key" "deploy" {
 
 resource "digitalocean_volume" "data" {
   region                  = var.region
-  name                    = "st0x-rest-api-data"
+  name                    = "albion-rest-api-data"
   size                    = var.volume_size_gb
   initial_filesystem_type = "ext4"
   description             = "Persistent storage for SQLite database and logs"
@@ -12,7 +12,7 @@ resource "digitalocean_volume" "data" {
 
 resource "digitalocean_droplet" "nixos" {
   image    = "ubuntu-24-04-x64"
-  name     = "st0x-rest-api-nixos"
+  name     = "albion-rest-api-nixos"
   region   = var.region
   size     = var.droplet_size
   ssh_keys = [data.digitalocean_ssh_key.deploy.id]

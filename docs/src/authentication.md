@@ -22,14 +22,14 @@ echo -n "abc123:mysecret" | base64
 # Output: YWJjMTIzOm15c2VjcmV0
 
 # Use in a request
-curl https://api.st0x.io/v1/tokens \
+curl https://api.albion.rest/v1/tokens \
   -H "Authorization: Basic YWJjMTIzOm15c2VjcmV0"
 ```
 
 Most HTTP client libraries handle Basic Auth natively. For example, with curl's `-u` flag:
 
 ```bash
-curl -u "abc123:mysecret" https://api.st0x.io/v1/tokens
+curl -u "abc123:mysecret" https://api.albion.rest/v1/tokens
 ```
 
 ## Error Responses

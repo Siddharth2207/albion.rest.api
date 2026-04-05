@@ -1,6 +1,9 @@
 name: Deploy
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -14,6 +17,8 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      DEFAULT_DEPLOY_HOST: 104.236.85.154
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@v1.3.1
@@ -61,6 +66,9 @@ jobs:
           if [ -n "${{ secrets.DEPLOY_HOST }}" ]; then
             host_ip="${{ secrets.DEPLOY_HOST }}"
             echo "Using DEPLOY_HOST secret"
+          elif [ -n "$DEFAULT_DEPLOY_HOST" ]; then
+            host_ip="$DEFAULT_DEPLOY_HOST"
+            echo "Using default branch deploy host"
           else
             host_ip=$(nix run .#resolveIp -- -i ~/.ssh/id_ed25519)
             echo "Using resolved host IP from terraform state"
@@ -80,4 +88,6 @@ jobs:
       - run: ./prep.sh
 
       - name: Build and deploy
+        env:
+          DEPLOY_HOST: ${{ env.HOST_IP }}
         run: nix run .#deployService -- rest-api

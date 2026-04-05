@@ -7,7 +7,7 @@ variable "do_token" {
 variable "ssh_key_name" {
   description = "Name of the SSH key in DigitalOcean to add to the droplet"
   type        = string
-  default     = "st0x-op"
+  default     = "albion-deployments"
 }
 
 variable "region" {
@@ -19,7 +19,7 @@ variable "region" {
 variable "droplet_size" {
   description = "Droplet size slug"
   type        = string
-  default     = "s-2vcpu-4gb"
+  default     = "s-4vcpu-8gb-amd"
 }
 
 variable "volume_size_gb" {

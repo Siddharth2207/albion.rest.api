@@ -5,7 +5,7 @@ let
   inherit (deploy-rs.lib.${system}) activate;
   profileBase = "/nix/var/nix/profiles/per-service";
 
-  st0xPackage = self.packages.${system}.st0x-rest-api;
+  albionPackage = self.packages.${system}.albion-rest-api;
 
   services = import ./services.nix;
   enabledServices = builtins.attrNames (builtins.removeAttrs services
@@ -14,11 +14,11 @@ let
 
   mkServiceProfile = name:
     let
-      markerFile = "/run/st0x/${name}.ready";
-    in activate.custom st0xPackage (builtins.concatStringsSep " && " [
+      markerFile = "/run/albion/${name}.ready";
+    in activate.custom albionPackage (builtins.concatStringsSep " && " [
       "systemctl stop ${name} || true"
       "rm -f ${markerFile}"
-      "mkdir -p /run/st0x"
+      "mkdir -p /run/albion"
       "touch ${markerFile}"
       "systemctl restart ${name}"
     ]);
@@ -30,7 +30,7 @@ let
 
 in {
   config = {
-    nodes.st0x-rest-api = {
+    nodes.albion-rest-api = {
       hostname = builtins.getEnv "DEPLOY_HOST";
       sshUser = "root";
       user = "root";
@@ -38,7 +38,7 @@ in {
       profilesOrder = [ "system" ] ++ enabledServices;
 
       profiles = {
-        system.path = activate.nixos self.nixosConfigurations.st0x-rest-api;
+        system.path = activate.nixos self.nixosConfigurations.albion-rest-api;
       } // builtins.listToAttrs (map (name: {
         inherit name;
         value = mkProfile name;
@@ -52,8 +52,35 @@ in {
         ++ [ deploy-rs.packages.${localSystem}.deploy-rs ];
 
       deployPreamble = ''
-        ${infraPkgs.resolveIp}
-        export DEPLOY_HOST="$host_ip"
+        ${infraPkgs.parseIdentity}
+        if [ -n "''${DEPLOY_HOST:-}" ]; then
+          host_ip="$DEPLOY_HOST"
+        else
+          trap 'rm -f infra/terraform.tfstate' EXIT
+          if [ -f infra/terraform.tfstate.age ]; then
+            if ! rage -d -i "$identity" infra/terraform.tfstate.age > infra/terraform.tfstate; then
+              echo "Failed to decrypt infra/terraform.tfstate.age with identity $identity" >&2
+              exit 1
+            fi
+          elif [ ! -f infra/terraform.tfstate ]; then
+            echo "Neither infra/terraform.tfstate.age nor infra/terraform.tfstate exists; cannot resolve host IP" >&2
+            exit 1
+          fi
+
+          host_ip=$(jq -r '.outputs.droplet_ipv4.value // empty' infra/terraform.tfstate 2>/dev/null || true)
+          if [ -z "$host_ip" ]; then
+            outputs=$(jq -r '.outputs | keys | join(\",\")' infra/terraform.tfstate 2>/dev/null || echo "<unreadable>")
+            echo "Unable to find outputs.droplet_ipv4.value in terraform state (available outputs: $outputs)" >&2
+            exit 1
+          fi
+
+          if ! echo "$host_ip" | grep -Eq '^([0-9]{1,3}\\.){3}[0-9]{1,3}$'; then
+            echo "Resolved host IP is not valid IPv4: '$host_ip'" >&2
+            exit 1
+          fi
+
+          export DEPLOY_HOST="$host_ip"
+        fi
         export NIX_SSHOPTS="-i $identity"
         ssh_flag="--ssh-opts=-i $identity"
       '';
@@ -69,7 +96,7 @@ in {
         runtimeInputs = deployInputs;
         text = ''
           ${deployPreamble}
-          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} .#st0x-rest-api.system \
+          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} .#albion-rest-api.system \
             -- --impure "$@"
         '';
       };
@@ -81,7 +108,7 @@ in {
           ${deployPreamble}
           profile="''${1:?usage: deploy-service <profile>}"
           shift
-          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} ".#st0x-rest-api.$profile" \
+          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} ".#albion-rest-api.$profile" \
             -- --impure "$@"
         '';
       };
@@ -91,7 +118,7 @@ in {
         runtimeInputs = deployInputs;
         text = ''
           ${deployPreamble}
-          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} .#st0x-rest-api \
+          deploy ${deployFlags} ''${ssh_flag:+"$ssh_flag"} .#albion-rest-api \
             -- --impure "$@"
         '';
       };

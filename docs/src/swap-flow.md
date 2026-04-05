@@ -11,7 +11,7 @@ POST /v1/swap/quote
 ### Request
 
 ```bash
-curl -X POST https://api.st0x.io/v1/swap/quote \
+curl -X POST https://api.albion.rest/v1/swap/quote \
   -H "Authorization: Basic <credentials>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -57,7 +57,7 @@ POST /v1/swap/calldata
 ### Request
 
 ```bash
-curl -X POST https://api.st0x.io/v1/swap/calldata \
+curl -X POST https://api.albion.rest/v1/swap/calldata \
   -H "Authorization: Basic <credentials>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -139,7 +139,7 @@ Once you receive a response with an empty `approvals` array, send the main trans
 
 ```bash
 # 1. Get quote
-QUOTE=$(curl -s -X POST https://api.st0x.io/v1/swap/quote \
+QUOTE=$(curl -s -X POST https://api.albion.rest/v1/swap/quote \
   -H "Authorization: Basic <credentials>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -151,7 +151,7 @@ QUOTE=$(curl -s -X POST https://api.st0x.io/v1/swap/quote \
 echo "$QUOTE" | jq .estimatedIoRatio
 
 # 2. Get calldata (add some slippage to the IO ratio)
-CALLDATA=$(curl -s -X POST https://api.st0x.io/v1/swap/calldata \
+CALLDATA=$(curl -s -X POST https://api.albion.rest/v1/swap/calldata \
   -H "Authorization: Basic <credentials>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -173,7 +173,7 @@ if [ "$APPROVALS" != "[]" ]; then
 
   # Now call the calldata endpoint again — this time approvals are in place
   # and the response will contain the swap calldata in "data"
-  CALLDATA=$(curl -s -X POST https://api.st0x.io/v1/swap/calldata \
+  CALLDATA=$(curl -s -X POST https://api.albion.rest/v1/swap/calldata \
     -H "Authorization: Basic <credentials>" \
     -H "Content-Type: application/json" \
     -d '{

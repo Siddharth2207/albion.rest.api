@@ -28,7 +28,7 @@ All error responses follow a consistent format.
 ### Bad Request
 
 ```bash
-curl -X POST https://api.st0x.io/v1/swap/quote \
+curl -X POST https://api.albion.rest/v1/swap/quote \
   -H "Authorization: Basic <credentials>" \
   -H "Content-Type: application/json" \
   -d '{}'
@@ -46,7 +46,7 @@ curl -X POST https://api.st0x.io/v1/swap/quote \
 ### Not Found
 
 ```bash
-curl https://api.st0x.io/v1/order/0xinvalidhash \
+curl https://api.albion.rest/v1/order/0xinvalidhash \
   -H "Authorization: Basic <credentials>"
 ```
 

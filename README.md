@@ -1,6 +1,6 @@
-# st0x REST API
+# Albion REST API
 
-REST API for st0x orderbook operations. Built with Rocket, backed by SQLite, and authenticated via API keys using HTTP Basic auth.
+REST API for Albion orderbook operations. Built with Rocket, backed by SQLite, and authenticated via API keys using HTTP Basic auth.
 
 ## Setup
 
@@ -8,7 +8,7 @@ REST API for st0x orderbook operations. Built with Rocket, backed by SQLite, and
 
 ```sh
 git clone <repo-url>
-cd st0x-rest-api
+cd albion.rest.api
 git submodule update --init --recursive
 ```
 
@@ -25,8 +25,8 @@ This writes `COMMIT_SHA` to `.env` and bootstraps the orderbook submodule.
 The binary has two subcommands:
 
 ```
-st0x_rest_api serve     Start the API server
-st0x_rest_api keys      Manage API keys
+albion_rest_api serve     Start the API server
+albion_rest_api keys      Manage API keys
 ```
 
 ### Starting the server

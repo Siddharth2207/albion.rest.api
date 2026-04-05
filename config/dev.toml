@@ -1,5 +1,5 @@
 log_dir = "./logs"
-database_url = "sqlite:./data/st0x.db"
+database_url = "sqlite:./data/albion.db"
 registry_url = "https://raw.githubusercontent.com/rainlanguage/rain.strategies/5d0a11ad4a3e89531c922317b09216200ea7bdc0/registry"
 rate_limit_global_rpm = 600
 rate_limit_per_key_rpm = 60

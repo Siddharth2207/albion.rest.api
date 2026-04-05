@@ -19,7 +19,7 @@ let
   };
 
   commonArgs = {
-    pname = "st0x-rest-api";
+    pname = "albion-rest-api";
     version = "0.1.0";
     src = ./.;
 
@@ -32,6 +32,9 @@ let
       [ pkgs.apple-sdk_15 ];
 
     COMMIT_SHA = builtins.getEnv "COMMIT_SHA";
+
+    # svm-rs-builds fetches Solidity release metadata at build time
+    __noChroot = true;
 
     postUnpack = ''
       rm -rf $sourceRoot/lib
@@ -56,8 +59,8 @@ in {
     doCheck = true;
 
     meta = {
-      description = "st0x REST API server";
-      homepage = "https://github.com/ST0x-Technology/st0x-rest-api";
+      description = "Albion REST API server";
+      homepage = "https://github.com/albionlabs/albion.rest.api";
     };
   });
 

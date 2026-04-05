@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-1. An API key (contact the st0x team to obtain one)
+1. An API key (contact the Albion team to obtain one)
 2. A tool that can make HTTP requests (curl, Postman, or any HTTP client library)
 
 ## Base URL
@@ -10,7 +10,7 @@
 All endpoints are served from:
 
 ```
-https://api.st0x.io
+https://api.albion.rest
 ```
 
 ## Quick Test
@@ -18,7 +18,7 @@ https://api.st0x.io
 Verify the API is running:
 
 ```bash
-curl https://api.st0x.io/health
+curl https://api.albion.rest/health
 ```
 
 ```json
@@ -40,7 +40,7 @@ echo -n "your_key_id:your_secret" | base64
 Then make an authenticated request to list available tokens:
 
 ```bash
-curl https://api.st0x.io/v1/tokens \
+curl https://api.albion.rest/v1/tokens \
   -H "Authorization: Basic <base64_credentials>"
 ```
 

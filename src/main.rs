@@ -2,6 +2,7 @@
 extern crate rocket;
 
 mod auth;
+mod cache;
 mod catchers;
 mod cli;
 mod config;
@@ -78,9 +79,9 @@ enum StartupError {
         (name = "Registry", description = "Registry information endpoints"),
     ),
     info(
-        title = "st0x REST API",
+        title = "Albion REST API",
         version = "0.1.0",
-        description = "REST API for st0x orderbook operations",
+        description = "REST API for Albion orderbook operations",
     )
 )]
 struct ApiDoc;
@@ -121,11 +122,20 @@ pub(crate) fn rocket(
     let figment = rocket::Config::figment().merge((rocket::Config::LOG_LEVEL, "normal"));
 
     let options = Options::Index | Options::NormalizeDirs;
+    let order_cache = routes::order::order_detail_cache();
+    let swap_cache = routes::swap::swap_quote_cache();
+
+    let mut registry_caches = cache::CacheGroup::new();
+    registry_caches.register(&order_cache);
+    registry_caches.register(&swap_cache);
 
     Ok(rocket::custom(figment)
         .manage(pool)
         .manage(rate_limiter)
         .manage(raindex_config)
+        .manage(order_cache)
+        .manage(swap_cache)
+        .manage(registry_caches)
         .mount("/", routes::health::routes())
         .mount("/v1/tokens", routes::tokens::routes())
         .mount("/v1/swap", routes::swap::routes())

@@ -11,7 +11,7 @@ echo "Running orderbook prep-base..."
 (cd lib/rain.orderbook && ./prep-base.sh)
 
 echo "Building docs..."
-nix build .#st0x-docs
+nix build .#albion-docs
 rm -rf docs/book
 cp -r result docs/book
 
