@@ -18,7 +18,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      DEFAULT_DEPLOY_HOST: 104.236.85.154
+      DEFAULT_DEPLOY_HOST: 178.62.61.40
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@v1.3.1
