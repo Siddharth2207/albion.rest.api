@@ -20,11 +20,10 @@ use std::time::Instant;
 
 pub(crate) const DEFAULT_PAGE_SIZE: u32 = 20;
 pub(crate) const MAX_PAGE_SIZE: u16 = 50;
-// The library's get_orders() calls fetch_orders_dotrain_sources() which makes
-// network requests to the Goldsky metaboard subgraph for each order (~5s for 20
-// orders). Since we don't use the dotrain source data in our API, a longer cache
-// TTL amortizes this cost. The frontend uses 30s stale / 60s refetch intervals.
-const ORDERS_LIST_CACHE_TTL: Duration = Duration::from_secs(60);
+// With metaboard lookups disabled, orders queries are fast (local DB + RPC
+// quotes). A 15s TTL keeps prices fresh while still deduplicating concurrent
+// requests from multiple frontend clients.
+const ORDERS_LIST_CACHE_TTL: Duration = Duration::from_secs(15);
 const ORDERS_LIST_CACHE_CAPACITY: u64 = 1_000;
 
 pub(crate) type OrdersByOwnerCache =
