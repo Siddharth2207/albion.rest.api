@@ -147,7 +147,9 @@ impl<'a> OrdersListDataSource for RaindexOrdersListDataSource<'a> {
                 .map(|(_, order)| order.clone())
                 .collect();
 
-            match fetch_order_quotes_batch(&group_orders, None, None).await {
+            // Use small chunk size (4) to avoid exceeding public RPC eth_call gas limits,
+            // which would trigger expensive probe-and-split retries in the quote library.
+            match fetch_order_quotes_batch(&group_orders, None, Some(4)).await {
                 Ok(group_quotes) => {
                     tracing::info!(
                         chain_id,

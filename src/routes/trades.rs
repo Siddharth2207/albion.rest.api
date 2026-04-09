@@ -684,18 +684,21 @@ async fn process_trades_batch(
     );
 
     if !uncached.is_empty() {
-        let fetch_results =
-            join_all(uncached.iter().map(|&hash| fetch_trades_for_hash(ds, hash))).await;
+        const BATCH_CONCURRENCY: usize = 5;
+        for chunk in uncached.chunks(BATCH_CONCURRENCY) {
+            let chunk_results =
+                join_all(chunk.iter().map(|&hash| fetch_trades_for_hash(ds, hash))).await;
 
-        for (&hash, result) in uncached.iter().zip(fetch_results) {
-            match result {
-                Ok(trades) => {
-                    cache.insert(hash, trades.clone()).await;
-                    cached_map.insert(hash, trades);
-                }
-                Err(e) => {
-                    tracing::warn!(order_hash = %hash, error = %e, "failed to fetch trades for order in batch");
-                    cached_map.insert(hash, vec![]);
+            for (&hash, result) in chunk.iter().zip(chunk_results) {
+                match result {
+                    Ok(trades) => {
+                        cache.insert(hash, trades.clone()).await;
+                        cached_map.insert(hash, trades);
+                    }
+                    Err(e) => {
+                        tracing::warn!(order_hash = %hash, error = %e, "failed to fetch trades for order in batch");
+                        cached_map.insert(hash, vec![]);
+                    }
                 }
             }
         }

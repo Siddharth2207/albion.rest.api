@@ -8,7 +8,7 @@ use crate::fairings::{GlobalRateLimit, TracingSpan};
 use crate::types::common::ValidatedAddress;
 use crate::types::orders::{OrdersListResponse, OrdersPaginationParams};
 use alloy::primitives::Address;
-use rain_orderbook_common::raindex_client::orders::GetOrdersFilters;
+use rain_orderbook_common::raindex_client::orders::{GetOrdersFilters, RaindexOrder};
 use rocket::serde::json::Json;
 use rocket::State;
 use tracing::Instrument;
@@ -55,15 +55,35 @@ pub(crate) async fn process_get_orders_by_owner(
         .get_orders_list(filters, Some(page_num), Some(effective_page_size))
         .await?;
 
+    // Only quote orders with non-zero output balance
+    let mut quotable_indices: Vec<usize> = Vec::new();
+    let mut quotable_orders: Vec<RaindexOrder> = Vec::new();
+    for (i, order) in orders.iter().enumerate() {
+        let has_balance = crate::routes::resolve_io_vaults(order)
+            .map(|(_, output)| {
+                output
+                    .formatted_balance()
+                    .parse::<f64>()
+                    .map_or(false, |b| b > 0.0)
+            })
+            .unwrap_or(false);
+        if has_balance {
+            quotable_indices.push(i);
+            quotable_orders.push(order.clone());
+        }
+    }
+
     tracing::info!(
-        quoted_orders = orders.len(),
+        total_orders = orders.len(),
+        quotable_orders = quotable_orders.len(),
+        skipped_zero_balance = orders.len() - quotable_orders.len(),
         "fetching batched quotes for orders by owner"
     );
-    let quote_results = ds.get_order_quotes_batch(&orders).await;
+    let quote_results = ds.get_order_quotes_batch(&quotable_orders).await;
 
-    let mut summaries = Vec::with_capacity(orders.len());
-    for (order, quotes_result) in orders.iter().zip(quote_results) {
-        let io_ratio = match quotes_result {
+    let mut io_ratios: Vec<String> = vec!["-".into(); orders.len()];
+    for (qi, &original_idx) in quotable_indices.iter().enumerate() {
+        io_ratios[original_idx] = match &quote_results[qi] {
             Ok(quotes) => quotes
                 .first()
                 .and_then(|q| q.data.as_ref())
@@ -71,14 +91,18 @@ pub(crate) async fn process_get_orders_by_owner(
                 .unwrap_or_else(|| "-".into()),
             Err(err) => {
                 tracing::warn!(
-                    order_hash = ?order.order_hash(),
+                    order_hash = ?orders[original_idx].order_hash(),
                     error = ?err,
                     "quote fetch failed; using fallback io_ratio"
                 );
                 "-".into()
             }
         };
-        summaries.push(build_order_summary(order, &io_ratio)?);
+    }
+
+    let mut summaries = Vec::with_capacity(orders.len());
+    for (order, io_ratio) in orders.iter().zip(io_ratios.iter()) {
+        summaries.push(build_order_summary(order, io_ratio)?);
     }
 
     let pagination = build_pagination(total_count, page_num.into(), effective_page_size.into());
@@ -234,7 +258,8 @@ mod tests {
         assert_eq!(result.orders.len(), 1);
         assert_eq!(result.orders[0].input_token.symbol, "wtMSTR");
         assert_eq!(result.orders[0].output_token.symbol, "wtMSTR");
-        assert_eq!(result.orders[0].io_ratio, "200.0");
+        // Zero-balance orders are not quoted — io_ratio defaults to "-"
+        assert_eq!(result.orders[0].io_ratio, "-");
     }
 
     #[rocket::async_test]

@@ -8,8 +8,9 @@ use crate::fairings::{GlobalRateLimit, TracingSpan};
 use crate::types::common::ValidatedAddress;
 use crate::types::orders::{OrderSide, OrdersByTokenParams, OrdersListResponse};
 use alloy::primitives::Address;
-use rain_orderbook_common::raindex_client::orders::GetOrdersFilters;
-use rain_orderbook_common::raindex_client::orders::GetOrdersTokenFilter;
+use rain_orderbook_common::raindex_client::orders::{
+    GetOrdersFilters, GetOrdersTokenFilter, RaindexOrder,
+};
 use rocket::serde::json::Json;
 use rocket::State;
 use std::time::Instant;
@@ -84,20 +85,41 @@ pub(crate) async fn process_get_orders_by_token(
         .await?;
     let orders_stage_duration_ms = orders_stage_start.elapsed().as_millis();
 
+    // Separate orders with non-zero output balance (worth quoting) from empty ones
+    let mut quotable_indices: Vec<usize> = Vec::new();
+    let mut quotable_orders: Vec<RaindexOrder> = Vec::new();
+    for (i, order) in orders.iter().enumerate() {
+        let has_balance = crate::routes::resolve_io_vaults(order)
+            .map(|(_, output)| {
+                output
+                    .formatted_balance()
+                    .parse::<f64>()
+                    .map_or(false, |b| b > 0.0)
+            })
+            .unwrap_or(false);
+        if has_balance {
+            quotable_indices.push(i);
+            quotable_orders.push(order.clone());
+        }
+    }
+
     let quotes_stage_start = Instant::now();
     tracing::info!(
-        quoted_orders = orders.len(),
+        total_orders = orders.len(),
+        quotable_orders = quotable_orders.len(),
+        skipped_zero_balance = orders.len() - quotable_orders.len(),
         "fetching batched quotes for orders by token"
     );
-    let quote_results = ds.get_order_quotes_batch(&orders).await;
+    let quote_results = ds.get_order_quotes_batch(&quotable_orders).await;
     let quotes_stage_duration_ms = quotes_stage_start.elapsed().as_millis();
 
-    let mut summaries = Vec::with_capacity(orders.len());
+    // Map quote results back to original order positions
+    let mut io_ratios: Vec<String> = vec!["-".into(); orders.len()];
     let mut quote_success_count: usize = 0;
     let mut quote_empty_count: usize = 0;
     let mut quote_error_count: usize = 0;
-    for (order, quotes_result) in orders.iter().zip(quote_results) {
-        let io_ratio = match quotes_result {
+    for (qi, &original_idx) in quotable_indices.iter().enumerate() {
+        io_ratios[original_idx] = match &quote_results[qi] {
             Ok(quotes) => quotes
                 .first()
                 .and_then(|q| q.data.as_ref())
@@ -112,14 +134,18 @@ pub(crate) async fn process_get_orders_by_token(
             Err(err) => {
                 quote_error_count += 1;
                 tracing::warn!(
-                    order_hash = ?order.order_hash(),
+                    order_hash = ?orders[original_idx].order_hash(),
                     error = ?err,
                     "quote fetch failed; using fallback io_ratio"
                 );
                 "-".into()
             }
         };
-        summaries.push(build_order_summary(order, &io_ratio)?);
+    }
+
+    let mut summaries = Vec::with_capacity(orders.len());
+    for (order, io_ratio) in orders.iter().zip(io_ratios.iter()) {
+        summaries.push(build_order_summary(order, io_ratio)?);
     }
 
     let pagination = build_pagination(total_count, page_num.into(), effective_page_size.into());
