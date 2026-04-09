@@ -1,7 +1,7 @@
 log_dir = "/mnt/data/albion-rest-api/logs"
 database_url = "sqlite:///mnt/data/albion-rest-api/albion.db"
 registry_url = "https://raw.githubusercontent.com/rainlanguage/rain.strategies/5d0a11ad4a3e89531c922317b09216200ea7bdc0/registry"
-rate_limit_global_rpm = 600
-rate_limit_per_key_rpm = 60
+rate_limit_global_rpm = 6000
+rate_limit_per_key_rpm = 1200
 docs_dir = "/var/lib/albion-docs"
 local_db_path = "/mnt/data/albion-rest-api/raindex.db"
