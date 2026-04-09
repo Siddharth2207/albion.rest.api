@@ -1,4 +1,5 @@
 use crate::types::common::TokenRef;
+use crate::types::order::OrderTradeEntry;
 use alloy::primitives::{Address, FixedBytes};
 use rocket::form::FromForm;
 use serde::{Deserialize, Serialize};
@@ -122,4 +123,25 @@ pub struct TradesByTxResponse {
     pub sender: Address,
     pub trades: Vec<TradeByTxEntry>,
     pub totals: TradesTotals,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TradesBatchRequest {
+    #[schema(value_type = Vec<String>)]
+    pub order_hashes: Vec<FixedBytes<32>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TradesBatchEntry {
+    #[schema(value_type = String, example = "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab")]
+    pub order_hash: FixedBytes<32>,
+    pub trades: Vec<OrderTradeEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TradesBatchResponse {
+    pub orders: Vec<TradesBatchEntry>,
 }

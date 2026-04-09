@@ -65,6 +65,7 @@ enum StartupError {
         routes::orders::get_orders_by_token,
         routes::trades::get_trades_by_tx,
         routes::trades::get_trades_by_address,
+        routes::trades::post_trades_batch,
         routes::registry::get_registry,
     ),
     components(),
@@ -128,6 +129,7 @@ pub(crate) fn rocket(
     let swap_cache = routes::swap::swap_quote_cache();
     let trades_by_address_cache = routes::trades::trades_by_address_cache();
     let trades_by_tx_cache = routes::trades::trades_by_tx_cache();
+    let trades_by_order_hash_cache = routes::trades::trades_by_order_hash_cache();
 
     let mut registry_caches = cache::CacheGroup::new();
     registry_caches.register(&order_cache);
@@ -136,6 +138,7 @@ pub(crate) fn rocket(
     registry_caches.register(&swap_cache);
     registry_caches.register(&trades_by_address_cache);
     registry_caches.register(&trades_by_tx_cache);
+    registry_caches.register(&trades_by_order_hash_cache);
 
     Ok(rocket::custom(figment)
         .manage(pool)
@@ -147,6 +150,7 @@ pub(crate) fn rocket(
         .manage(swap_cache)
         .manage(trades_by_address_cache)
         .manage(trades_by_tx_cache)
+        .manage(trades_by_order_hash_cache)
         .manage(registry_caches)
         .mount("/", routes::health::routes())
         .mount("/v1/tokens", routes::tokens::routes())

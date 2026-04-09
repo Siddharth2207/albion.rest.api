@@ -3,9 +3,11 @@ use crate::cache::AppCache;
 use crate::error::{ApiError, ApiErrorResponse};
 use crate::fairings::{GlobalRateLimit, TracingSpan};
 use crate::types::common::{TokenRef, ValidatedAddress, ValidatedFixedBytes};
+use crate::types::order::OrderTradeEntry;
 use crate::types::trades::{
-    TradeByAddress, TradeByTxEntry, TradeRequest, TradeResult, TradesByAddressResponse,
-    TradesByTxResponse, TradesPagination, TradesPaginationParams, TradesTotals,
+    TradeByAddress, TradeByTxEntry, TradeRequest, TradeResult, TradesBatchEntry,
+    TradesBatchRequest, TradesBatchResponse, TradesByAddressResponse, TradesByTxResponse,
+    TradesPagination, TradesPaginationParams, TradesTotals,
 };
 use alloy::primitives::{Address, FixedBytes, B256};
 use async_trait::async_trait;
@@ -28,11 +30,14 @@ const FAST_INDEX_CHECK_ATTEMPTS: usize = 1;
 const FAST_INDEX_CHECK_INTERVAL_MS: u64 = 0;
 const TRADES_BY_ADDRESS_CACHE_TTL: Duration = Duration::from_secs(10);
 const TRADES_BY_TX_CACHE_TTL: Duration = Duration::from_secs(300);
+const TRADES_BY_ORDER_HASH_CACHE_TTL: Duration = Duration::from_secs(60);
 const TRADES_CACHE_CAPACITY: u64 = 1_000;
+const TRADES_BATCH_MAX_HASHES: usize = 50;
 
 type TradesByAddressCache =
     AppCache<(Address, u32, u32, Option<u64>, Option<u64>), TradesByAddressResponse>;
 type TradesByTxCache = AppCache<B256, TradesByTxResponse>;
+type TradesByOrderHashCache = AppCache<B256, Vec<OrderTradeEntry>>;
 
 pub(crate) fn trades_by_address_cache() -> TradesByAddressCache {
     AppCache::new(TRADES_CACHE_CAPACITY, TRADES_BY_ADDRESS_CACHE_TTL)
@@ -40,6 +45,10 @@ pub(crate) fn trades_by_address_cache() -> TradesByAddressCache {
 
 pub(crate) fn trades_by_tx_cache() -> TradesByTxCache {
     AppCache::new(TRADES_CACHE_CAPACITY, TRADES_BY_TX_CACHE_TTL)
+}
+
+pub(crate) fn trades_by_order_hash_cache() -> TradesByOrderHashCache {
+    AppCache::new(TRADES_CACHE_CAPACITY, TRADES_BY_ORDER_HASH_CACHE_TTL)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -631,8 +640,142 @@ pub async fn get_trades_by_address(
     .await
 }
 
+async fn fetch_trades_for_hash(
+    ds: &dyn TradesDataSource,
+    hash: B256,
+) -> Result<Vec<OrderTradeEntry>, ApiError> {
+    let filters = GetOrdersFilters {
+        order_hash: Some(hash),
+        ..Default::default()
+    };
+    let (orders, _) = ds.get_orders(filters, None, None).await?;
+    let order = match orders.into_iter().next() {
+        Some(o) => o,
+        None => return Ok(vec![]),
+    };
+    let trades = ds.get_order_trades(&order, None, None).await?;
+    Ok(trades.iter().map(super::order::map_trade).collect())
+}
+
+async fn process_trades_batch(
+    ds: &dyn TradesDataSource,
+    cache: &TradesByOrderHashCache,
+    hashes: Vec<B256>,
+) -> Result<TradesBatchResponse, ApiError> {
+    let total_start = Instant::now();
+
+    let mut cached_map: std::collections::HashMap<B256, Vec<OrderTradeEntry>> =
+        std::collections::HashMap::new();
+    let mut uncached: Vec<B256> = Vec::new();
+
+    for &hash in &hashes {
+        if let Some(trades) = cache.get(&hash).await {
+            cached_map.insert(hash, trades);
+        } else {
+            uncached.push(hash);
+        }
+    }
+
+    tracing::info!(
+        total_hashes = hashes.len(),
+        cached = cached_map.len(),
+        uncached = uncached.len(),
+        "batch trades cache check"
+    );
+
+    if !uncached.is_empty() {
+        let fetch_results =
+            join_all(uncached.iter().map(|&hash| fetch_trades_for_hash(ds, hash))).await;
+
+        for (&hash, result) in uncached.iter().zip(fetch_results) {
+            match result {
+                Ok(trades) => {
+                    cache.insert(hash, trades.clone()).await;
+                    cached_map.insert(hash, trades);
+                }
+                Err(e) => {
+                    tracing::warn!(order_hash = %hash, error = %e, "failed to fetch trades for order in batch");
+                    cached_map.insert(hash, vec![]);
+                }
+            }
+        }
+    }
+
+    let entries = hashes
+        .iter()
+        .map(|hash| TradesBatchEntry {
+            order_hash: *hash,
+            trades: cached_map.remove(hash).unwrap_or_default(),
+        })
+        .collect();
+
+    tracing::info!(
+        total_duration_ms = total_start.elapsed().as_millis(),
+        total_hashes = hashes.len(),
+        "batch trades request processed"
+    );
+
+    Ok(TradesBatchResponse { orders: entries })
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/trades/batch",
+    tag = "Trades",
+    security(("basicAuth" = [])),
+    request_body = TradesBatchRequest,
+    responses(
+        (status = 200, description = "Trades grouped by order hash", body = TradesBatchResponse),
+        (status = 400, description = "Bad request", body = ApiErrorResponse),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 429, description = "Rate limited", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    )
+)]
+#[post("/batch", data = "<body>")]
+pub async fn post_trades_batch(
+    _global: GlobalRateLimit,
+    _key: AuthenticatedKey,
+    shared_raindex: &State<crate::raindex::SharedRaindexProvider>,
+    trades_by_order_hash_cache: &State<TradesByOrderHashCache>,
+    span: TracingSpan,
+    body: Json<TradesBatchRequest>,
+) -> Result<Json<TradesBatchResponse>, ApiError> {
+    async move {
+        tracing::info!(
+            hash_count = body.order_hashes.len(),
+            "batch trades request received"
+        );
+
+        if body.order_hashes.is_empty() {
+            return Ok(Json(TradesBatchResponse { orders: vec![] }));
+        }
+
+        if body.order_hashes.len() > TRADES_BATCH_MAX_HASHES {
+            return Err(ApiError::BadRequest(format!(
+                "maximum {} order hashes per batch request",
+                TRADES_BATCH_MAX_HASHES
+            )));
+        }
+
+        let raindex = shared_raindex.read().await;
+        let ds = RaindexTradesDataSource {
+            client: raindex.client(),
+        };
+        let response = process_trades_batch(
+            &ds,
+            trades_by_order_hash_cache,
+            body.into_inner().order_hashes,
+        )
+        .await?;
+        Ok(Json(response))
+    }
+    .instrument(span.0)
+    .await
+}
+
 pub fn routes() -> Vec<Route> {
-    rocket::routes![get_trades_by_tx, get_trades_by_address]
+    rocket::routes![get_trades_by_tx, get_trades_by_address, post_trades_batch]
 }
 
 #[cfg(test)]
@@ -813,6 +956,85 @@ mod tests {
         let client = TestClientBuilder::new().build().await;
         let response = client
             .get("/v1/trades/0x0000000000000000000000000000000000000001")
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::Unauthorized);
+    }
+
+    #[rocket::async_test]
+    async fn test_process_trades_batch_success() {
+        let ds = MockTradesDataSource {
+            orders_result: Ok((vec![mock_order()], 1)),
+            trades_result: Ok(vec![mock_trade()]),
+            tx_index_state: Ok(TxIndexState::Indexed),
+        };
+        let cache = trades_by_order_hash_cache();
+        let hash: B256 = "0x000000000000000000000000000000000000000000000000000000000000abcd"
+            .parse()
+            .unwrap();
+
+        let response = process_trades_batch(&ds, &cache, vec![hash]).await.unwrap();
+
+        assert_eq!(response.orders.len(), 1);
+        assert_eq!(response.orders[0].order_hash, hash);
+        assert_eq!(response.orders[0].trades.len(), 1);
+    }
+
+    #[rocket::async_test]
+    async fn test_process_trades_batch_caches_results() {
+        let ds = MockTradesDataSource {
+            orders_result: Ok((vec![mock_order()], 1)),
+            trades_result: Ok(vec![mock_trade()]),
+            tx_index_state: Ok(TxIndexState::Indexed),
+        };
+        let cache = trades_by_order_hash_cache();
+        let hash: B256 = "0x000000000000000000000000000000000000000000000000000000000000abcd"
+            .parse()
+            .unwrap();
+
+        let _ = process_trades_batch(&ds, &cache, vec![hash]).await.unwrap();
+        let cached = cache.get(&hash).await;
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap().len(), 1);
+    }
+
+    #[rocket::async_test]
+    async fn test_process_trades_batch_empty_hashes() {
+        let ds = MockTradesDataSource {
+            orders_result: Ok((vec![], 0)),
+            trades_result: Ok(vec![]),
+            tx_index_state: Ok(TxIndexState::Indexed),
+        };
+        let cache = trades_by_order_hash_cache();
+
+        let response = process_trades_batch(&ds, &cache, vec![]).await.unwrap();
+        assert!(response.orders.is_empty());
+    }
+
+    #[rocket::async_test]
+    async fn test_process_trades_batch_order_not_found_returns_empty_trades() {
+        let ds = MockTradesDataSource {
+            orders_result: Ok((vec![], 0)),
+            trades_result: Ok(vec![]),
+            tx_index_state: Ok(TxIndexState::Indexed),
+        };
+        let cache = trades_by_order_hash_cache();
+        let hash: B256 = "0x0000000000000000000000000000000000000000000000000000000000001234"
+            .parse()
+            .unwrap();
+
+        let response = process_trades_batch(&ds, &cache, vec![hash]).await.unwrap();
+
+        assert_eq!(response.orders.len(), 1);
+        assert!(response.orders[0].trades.is_empty());
+    }
+
+    #[rocket::async_test]
+    async fn test_post_trades_batch_401_without_auth() {
+        let client = TestClientBuilder::new().build().await;
+        let response = client
+            .post("/v1/trades/batch")
+            .body(r#"{"orderHashes":[]}"#)
             .dispatch()
             .await;
         assert_eq!(response.status(), Status::Unauthorized);
