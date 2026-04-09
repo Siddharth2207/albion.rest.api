@@ -94,7 +94,7 @@ pub(crate) async fn process_get_orders_by_token(
                 output
                     .formatted_balance()
                     .parse::<f64>()
-                    .map_or(false, |b| b > 0.0)
+                    .is_ok_and(|b| b > 0.0)
             })
             .unwrap_or(false);
         if has_balance {
