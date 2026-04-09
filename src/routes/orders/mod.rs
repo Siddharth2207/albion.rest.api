@@ -2,9 +2,10 @@ mod get_by_owner;
 mod get_by_token;
 mod get_by_tx;
 
+use crate::cache::AppCache;
 use crate::error::ApiError;
 use crate::types::common::TokenRef;
-use crate::types::orders::{OrderSummary, OrdersPagination};
+use crate::types::orders::{OrderSide, OrderSummary, OrdersListResponse, OrdersPagination};
 use async_trait::async_trait;
 use futures::future::join_all;
 use rain_orderbook_common::raindex_client::order_quotes::{
@@ -14,10 +15,29 @@ use rain_orderbook_common::raindex_client::orders::{GetOrdersFilters, RaindexOrd
 use rain_orderbook_common::raindex_client::RaindexClient;
 use rocket::Route;
 use std::collections::BTreeMap;
+use std::time::Duration;
 use std::time::Instant;
 
 pub(crate) const DEFAULT_PAGE_SIZE: u32 = 20;
 pub(crate) const MAX_PAGE_SIZE: u16 = 50;
+// With metaboard lookups disabled, orders queries are fast (local DB + RPC
+// quotes). A 15s TTL keeps prices fresh while still deduplicating concurrent
+// requests from multiple frontend clients.
+const ORDERS_LIST_CACHE_TTL: Duration = Duration::from_secs(15);
+const ORDERS_LIST_CACHE_CAPACITY: u64 = 1_000;
+
+pub(crate) type OrdersByOwnerCache =
+    AppCache<(alloy::primitives::Address, u16, u16), OrdersListResponse>;
+pub(crate) type OrdersByTokenCache =
+    AppCache<(alloy::primitives::Address, Option<OrderSide>, u16, u16), OrdersListResponse>;
+
+pub(crate) fn orders_by_owner_cache() -> OrdersByOwnerCache {
+    AppCache::new(ORDERS_LIST_CACHE_CAPACITY, ORDERS_LIST_CACHE_TTL)
+}
+
+pub(crate) fn orders_by_token_cache() -> OrdersByTokenCache {
+    AppCache::new(ORDERS_LIST_CACHE_CAPACITY, ORDERS_LIST_CACHE_TTL)
+}
 
 #[async_trait]
 pub(crate) trait OrdersListDataSource: Send + Sync {
@@ -130,7 +150,9 @@ impl<'a> OrdersListDataSource for RaindexOrdersListDataSource<'a> {
                 .map(|(_, order)| order.clone())
                 .collect();
 
-            match fetch_order_quotes_batch(&group_orders, None, None).await {
+            // Use small chunk size (4) to avoid exceeding public RPC eth_call gas limits,
+            // which would trigger expensive probe-and-split retries in the quote library.
+            match fetch_order_quotes_batch(&group_orders, None, Some(4)).await {
                 Ok(group_quotes) => {
                     tracing::info!(
                         chain_id,

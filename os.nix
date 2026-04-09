@@ -26,6 +26,7 @@ let
       serviceConfig = {
         DynamicUser = true;
         SupplementaryGroups = [ "albion" ];
+        UMask = "0002";
         ExecStart = "${path} serve --config ${configFile}";
         Restart = "always";
         RestartSec = 5;
@@ -99,7 +100,7 @@ in {
       enable = true;
       recommendedTlsSettings = true;
       recommendedProxySettings = true;
-      virtualHosts."api.albion.rest" = {
+      virtualHosts."api.albionlabs.org" = {
         enableACME = true;
         forceSSL = true;
         locations."/" = {
@@ -113,7 +114,7 @@ in {
 
   security.acme = {
     acceptTerms = true;
-    defaults.email = "ops@albion.rest";
+    defaults.email = "ops@albionlabs.org";
   };
 
   networking.firewall = {
@@ -123,11 +124,6 @@ in {
       80
       443
     ];
-  };
-
-  fileSystems."/mnt/data" = {
-    device = "/dev/disk/by-id/scsi-0DO_Volume_albion-rest-api-data";
-    fsType = "ext4";
   };
 
   nix = {
@@ -161,6 +157,7 @@ in {
   };
 
   systemd.tmpfiles.rules = [
+    "d /mnt/data 0775 root albion -"
     "d /mnt/data/albion-rest-api 0775 root albion -"
     "d /mnt/data/albion-rest-api/logs 0775 root albion -"
   ];
@@ -178,6 +175,7 @@ in {
     "mkdir -p /nix/var/nix/profiles/per-service";
 
   system.activationScripts.albion-docs.text = ''
+    mkdir -p /var/lib
     ln -sfn ${docsRoot} /var/lib/albion-docs
   '';
 

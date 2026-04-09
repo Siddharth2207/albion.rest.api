@@ -101,12 +101,24 @@
             additionalBuildInputs = infraPkgs.buildInputs
               ++ [ nixos-anywhere.packages.${system}.default ];
             body = ''
-              ${infraPkgs.resolveIp}
+              ${infraPkgs.parseIdentity}
+              if [ -n "''${DEPLOY_HOST:-}" ]; then
+                host_ip="$DEPLOY_HOST"
+              else
+                ${infraPkgs.resolveIp}
+              fi
               ssh_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $identity"
+              build_on_flag=${
+                if system == "x86_64-linux" then
+                  "\"\""
+                else
+                  "\"--build-on remote\""
+              }
 
               nixos-anywhere --flake ".#albion-rest-api" \
                 --option pure-eval false \
                 --ssh-option "IdentityFile=$identity" \
+                ''${build_on_flag:+"$build_on_flag"} \
                 --target-host "root@$host_ip" "$@"
 
               echo "Waiting for host to come back up..."

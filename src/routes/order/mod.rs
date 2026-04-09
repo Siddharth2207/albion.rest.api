@@ -85,6 +85,7 @@ impl<'a> OrderDataSource for RaindexOrderDataSource<'a> {
 pub use cancel::*;
 pub use deploy_dca::*;
 pub use deploy_solver::*;
+pub(crate) use get_order::map_trade;
 pub use get_order::*;
 
 pub fn routes() -> Vec<Route> {
