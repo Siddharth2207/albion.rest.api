@@ -682,6 +682,7 @@ async fn fetch_trades_for_hash(
 async fn process_trades_batch(
     ds: &dyn TradesDataSource,
     cache: &TradesByOrderHashCache,
+    direct_trades: Option<&crate::direct_trades::DirectTradesFetcher>,
     hashes: Vec<B256>,
 ) -> Result<TradesBatchResponse, ApiError> {
     let total_start = Instant::now();
@@ -706,17 +707,49 @@ async fn process_trades_batch(
     );
 
     if !uncached.is_empty() {
-        let results = join_all(uncached.iter().map(|&hash| fetch_trades_for_hash(ds, hash))).await;
-
-        for (&hash, result) in uncached.iter().zip(results) {
-            match result {
-                Ok(trades) => {
-                    cache.insert(hash, trades.clone()).await;
-                    cached_map.insert(hash, trades);
+        if let Some(fetcher) = direct_trades {
+            // Fast path: single batch query via direct SQLite connection
+            match fetcher.batch_fetch(&uncached).await {
+                Ok(batch_result) => {
+                    for &hash in &uncached {
+                        let trades = batch_result.get(&hash).cloned().unwrap_or_default();
+                        cache.insert(hash, trades.clone()).await;
+                        cached_map.insert(hash, trades);
+                    }
                 }
                 Err(e) => {
-                    tracing::warn!(order_hash = %hash, error = %e, "failed to fetch trades for order in batch");
-                    cached_map.insert(hash, vec![]);
+                    tracing::warn!(error = %e, "direct batch trades failed; falling back to library");
+                    let results =
+                        join_all(uncached.iter().map(|&hash| fetch_trades_for_hash(ds, hash)))
+                            .await;
+                    for (&hash, result) in uncached.iter().zip(results) {
+                        match result {
+                            Ok(trades) => {
+                                cache.insert(hash, trades.clone()).await;
+                                cached_map.insert(hash, trades);
+                            }
+                            Err(e) => {
+                                tracing::warn!(order_hash = %hash, error = %e, "failed to fetch trades for order in batch");
+                                cached_map.insert(hash, vec![]);
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback: N parallel queries via library
+            let results =
+                join_all(uncached.iter().map(|&hash| fetch_trades_for_hash(ds, hash))).await;
+            for (&hash, result) in uncached.iter().zip(results) {
+                match result {
+                    Ok(trades) => {
+                        cache.insert(hash, trades.clone()).await;
+                        cached_map.insert(hash, trades);
+                    }
+                    Err(e) => {
+                        tracing::warn!(order_hash = %hash, error = %e, "failed to fetch trades for order in batch");
+                        cached_map.insert(hash, vec![]);
+                    }
                 }
             }
         }
@@ -759,6 +792,7 @@ pub async fn post_trades_batch(
     _key: AuthenticatedKey,
     shared_raindex: &State<crate::raindex::SharedRaindexProvider>,
     trades_by_order_hash_cache: &State<TradesByOrderHashCache>,
+    direct_trades: &State<Option<crate::direct_trades::DirectTradesFetcher>>,
     span: TracingSpan,
     body: Json<TradesBatchRequest>,
 ) -> Result<Json<TradesBatchResponse>, ApiError> {
@@ -786,6 +820,7 @@ pub async fn post_trades_batch(
         let response = process_trades_batch(
             &ds,
             trades_by_order_hash_cache,
+            direct_trades.inner().as_ref(),
             body.into_inner().order_hashes,
         )
         .await?;
@@ -1001,7 +1036,9 @@ mod tests {
             .parse()
             .unwrap();
 
-        let response = process_trades_batch(&ds, &cache, vec![hash]).await.unwrap();
+        let response = process_trades_batch(&ds, &cache, None, vec![hash])
+            .await
+            .unwrap();
 
         assert_eq!(response.orders.len(), 1);
         assert_eq!(response.orders[0].order_hash, hash);
@@ -1020,7 +1057,9 @@ mod tests {
             .parse()
             .unwrap();
 
-        let _ = process_trades_batch(&ds, &cache, vec![hash]).await.unwrap();
+        let _ = process_trades_batch(&ds, &cache, None, vec![hash])
+            .await
+            .unwrap();
         let cached = cache.get(&hash).await;
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().len(), 1);
@@ -1035,7 +1074,9 @@ mod tests {
         };
         let cache = trades_by_order_hash_cache();
 
-        let response = process_trades_batch(&ds, &cache, vec![]).await.unwrap();
+        let response = process_trades_batch(&ds, &cache, None, vec![])
+            .await
+            .unwrap();
         assert!(response.orders.is_empty());
     }
 
@@ -1051,7 +1092,9 @@ mod tests {
             .parse()
             .unwrap();
 
-        let response = process_trades_batch(&ds, &cache, vec![hash]).await.unwrap();
+        let response = process_trades_batch(&ds, &cache, None, vec![hash])
+            .await
+            .unwrap();
 
         assert_eq!(response.orders.len(), 1);
         assert!(response.orders[0].trades.is_empty());
