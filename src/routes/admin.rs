@@ -260,6 +260,7 @@ mod tests {
                 OrderDetail {
                     order_hash,
                     owner: Address::ZERO,
+                    order_bytes: alloy::primitives::Bytes::from(vec![0x01]),
                     order_details: OrderDetailsInfo {
                         type_: OrderType::Solver,
                         io_ratio: "1.0".into(),

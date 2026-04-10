@@ -102,6 +102,7 @@ fn build_order_detail(
     Ok(OrderDetail {
         order_hash: order.order_hash(),
         owner: order.owner(),
+        order_bytes: order.order_bytes(),
         order_details: OrderDetailsInfo {
             type_: order_type,
             io_ratio: io_ratio.to_string(),
@@ -306,6 +307,7 @@ mod tests {
                 OrderDetail {
                     order_hash,
                     owner: Address::ZERO,
+                    order_bytes: Bytes::from(vec![0x01]),
                     order_details: OrderDetailsInfo {
                         type_: OrderType::Solver,
                         io_ratio: "1.0".into(),

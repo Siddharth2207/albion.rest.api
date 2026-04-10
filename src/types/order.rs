@@ -148,6 +148,8 @@ pub struct OrderDetail {
     pub order_hash: FixedBytes<32>,
     #[schema(value_type = String, example = "0x1234567890abcdef1234567890abcdef12345678")]
     pub owner: Address,
+    #[schema(value_type = String, example = "0x01")]
+    pub order_bytes: Bytes,
     pub order_details: OrderDetailsInfo,
     pub input_token: TokenRef,
     pub output_token: TokenRef,
