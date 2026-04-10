@@ -13,6 +13,7 @@ use alloy::primitives::{Address, FixedBytes, B256};
 use async_trait::async_trait;
 use futures::future::join_all;
 use rain_math_float::Float;
+use rain_orderbook_common::local_db::OrderbookIdentifier;
 use rain_orderbook_common::raindex_client::orders::{GetOrdersFilters, RaindexOrder};
 use rain_orderbook_common::raindex_client::trades::RaindexTrade;
 use rain_orderbook_common::raindex_client::{RaindexClient, RaindexError};
@@ -88,6 +89,8 @@ trait TradesDataSource: Send + Sync {
             .collect())
     }
 
+    async fn find_order_by_hash(&self, hash: B256) -> Result<Option<RaindexOrder>, ApiError>;
+
     async fn check_tx_index_state(&self, tx_hash: B256) -> Result<TxIndexState, ApiError>;
 }
 
@@ -127,6 +130,30 @@ impl TradesDataSource for RaindexTradesDataSource<'_> {
                 tracing::error!(error = %e, order_hash = ?order.order_hash(), "failed to query order trades");
                 ApiError::Internal("failed to query order trades".into())
             })
+    }
+
+    async fn find_order_by_hash(&self, hash: B256) -> Result<Option<RaindexOrder>, ApiError> {
+        let orderbooks = self.client.get_all_orderbooks().map_err(|e| {
+            tracing::error!(error = %e, "failed to get orderbooks");
+            ApiError::Internal("failed to get orderbooks".into())
+        })?;
+
+        for orderbook in orderbooks.values() {
+            let ob_id = OrderbookIdentifier::new(orderbook.network.chain_id, orderbook.address);
+            match self.client.get_order_by_hash(&ob_id, hash).await {
+                Ok(order) => return Ok(Some(order)),
+                Err(RaindexError::OrderNotFound(..)) => continue,
+                Err(e) => {
+                    tracing::warn!(
+                        order_hash = %hash,
+                        error = %e,
+                        "error looking up order by hash"
+                    );
+                    continue;
+                }
+            }
+        }
+        Ok(None)
     }
 
     async fn get_trades_by_tx(&self, tx_hash: B256) -> Result<Vec<TradeWithOwner>, ApiError> {
@@ -644,12 +671,7 @@ async fn fetch_trades_for_hash(
     ds: &dyn TradesDataSource,
     hash: B256,
 ) -> Result<Vec<OrderTradeEntry>, ApiError> {
-    let filters = GetOrdersFilters {
-        order_hash: Some(hash),
-        ..Default::default()
-    };
-    let (orders, _) = ds.get_orders(filters, None, None).await?;
-    let order = match orders.into_iter().next() {
+    let order = match ds.find_order_by_hash(hash).await? {
         Some(o) => o,
         None => return Ok(vec![]),
     };
@@ -684,21 +706,17 @@ async fn process_trades_batch(
     );
 
     if !uncached.is_empty() {
-        const BATCH_CONCURRENCY: usize = 5;
-        for chunk in uncached.chunks(BATCH_CONCURRENCY) {
-            let chunk_results =
-                join_all(chunk.iter().map(|&hash| fetch_trades_for_hash(ds, hash))).await;
+        let results = join_all(uncached.iter().map(|&hash| fetch_trades_for_hash(ds, hash))).await;
 
-            for (&hash, result) in chunk.iter().zip(chunk_results) {
-                match result {
-                    Ok(trades) => {
-                        cache.insert(hash, trades.clone()).await;
-                        cached_map.insert(hash, trades);
-                    }
-                    Err(e) => {
-                        tracing::warn!(order_hash = %hash, error = %e, "failed to fetch trades for order in batch");
-                        cached_map.insert(hash, vec![]);
-                    }
+        for (&hash, result) in uncached.iter().zip(results) {
+            match result {
+                Ok(trades) => {
+                    cache.insert(hash, trades.clone()).await;
+                    cached_map.insert(hash, trades);
+                }
+                Err(e) => {
+                    tracing::warn!(order_hash = %hash, error = %e, "failed to fetch trades for order in batch");
+                    cached_map.insert(hash, vec![]);
                 }
             }
         }
@@ -812,6 +830,13 @@ mod tests {
             _end_time: Option<u64>,
         ) -> Result<Vec<RaindexTrade>, ApiError> {
             self.trades_result.clone()
+        }
+
+        async fn find_order_by_hash(&self, _hash: B256) -> Result<Option<RaindexOrder>, ApiError> {
+            match &self.orders_result {
+                Ok((orders, _)) => Ok(orders.first().cloned()),
+                Err(_) => Err(ApiError::Internal("failed to find order".into())),
+            }
         }
 
         async fn check_tx_index_state(&self, _tx_hash: B256) -> Result<TxIndexState, ApiError> {
