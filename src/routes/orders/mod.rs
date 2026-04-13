@@ -4,6 +4,7 @@ mod get_by_tx;
 
 use crate::cache::AppCache;
 use crate::error::ApiError;
+use crate::routes::order::get_order::determine_order_type;
 use crate::types::common::TokenRef;
 use crate::types::orders::{OrderSide, OrderSummary, OrdersListResponse, OrdersPagination};
 use async_trait::async_trait;
@@ -207,10 +208,13 @@ pub(crate) fn build_order_summary(
     let output_token_info = output.token();
     let created_at: u64 = order.timestamp_added().try_into().unwrap_or(0);
 
+    let order_type = determine_order_type(order);
+
     Ok(OrderSummary {
         order_hash: order.order_hash(),
         owner: order.owner(),
         order_bytes: order.order_bytes(),
+        order_type,
         input_token: TokenRef {
             address: input_token_info.address(),
             symbol: input_token_info.symbol().unwrap_or_default(),

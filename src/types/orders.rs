@@ -1,4 +1,5 @@
 use crate::types::common::TokenRef;
+use crate::types::order::OrderType;
 use alloy::primitives::{Address, Bytes, FixedBytes};
 use rocket::form::{FromForm, FromFormField};
 use serde::{Deserialize, Serialize};
@@ -48,6 +49,7 @@ pub struct OrderSummary {
     pub owner: Address,
     #[schema(value_type = String, example = "0x01")]
     pub order_bytes: Bytes,
+    pub order_type: OrderType,
     pub input_token: TokenRef,
     pub output_token: TokenRef,
     #[schema(example = "500000")]

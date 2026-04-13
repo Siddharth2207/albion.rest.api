@@ -73,7 +73,7 @@ async fn process_get_order(ds: &dyn OrderDataSource, hash: B256) -> Result<Order
     build_order_detail(&order, order_type, &io_ratio, &trades)
 }
 
-fn determine_order_type(order: &RaindexOrder) -> OrderType {
+pub(crate) fn determine_order_type(order: &RaindexOrder) -> OrderType {
     for meta in order.parsed_meta() {
         if let ParsedMeta::DotrainGuiStateV1(gui_state) = meta {
             if gui_state.selected_deployment.to_lowercase().contains("dca") {

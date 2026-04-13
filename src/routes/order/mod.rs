@@ -1,7 +1,7 @@
 mod cancel;
 mod deploy_dca;
 mod deploy_solver;
-mod get_order;
+pub(crate) mod get_order;
 
 use crate::cache::AppCache;
 use crate::error::ApiError;
