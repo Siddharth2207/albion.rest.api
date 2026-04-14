@@ -604,14 +604,12 @@ async fn process_get_taker_trades(
 ) -> Result<TakerTradesResponse, ApiError> {
     // Step 1: Get tx hashes (cached)
     let tx_hashes = match direct_trades {
-        Some(fetcher) => {
-            taker_tx_cache
-                .get_or_try_insert(sender, || async {
-                    fetcher.fetch_taker_tx_hashes(&sender).await
-                })
-                .await
-                .map_err(ApiError::from)?
-        }
+        Some(fetcher) => taker_tx_cache
+            .get_or_try_insert(sender, || async {
+                fetcher.fetch_taker_tx_hashes(&sender).await
+            })
+            .await
+            .map_err(ApiError::from)?,
         None => {
             tracing::warn!("direct trades fetcher unavailable; returning empty taker trades");
             return Ok(TakerTradesResponse {
@@ -961,7 +959,12 @@ pub async fn post_trades_batch(
 }
 
 pub fn routes() -> Vec<Route> {
-    rocket::routes![get_trades_by_tx, get_taker_trades, get_trades_by_address, post_trades_batch]
+    rocket::routes![
+        get_trades_by_tx,
+        get_taker_trades,
+        get_trades_by_address,
+        post_trades_batch
+    ]
 }
 
 #[cfg(test)]

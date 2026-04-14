@@ -194,14 +194,11 @@ impl DirectTradesFetcher {
                 })?;
 
             let rows = stmt
-                .query_map(
-                    rusqlite::params![sender_hex, chain_id, ob_addr],
-                    |row| {
-                        let tx_hash: String = row.get(0)?;
-                        let timestamp: i64 = row.get(1)?;
-                        Ok((tx_hash, timestamp))
-                    },
-                )
+                .query_map(rusqlite::params![sender_hex, chain_id, ob_addr], |row| {
+                    let tx_hash: String = row.get(0)?;
+                    let timestamp: i64 = row.get(1)?;
+                    Ok((tx_hash, timestamp))
+                })
                 .map_err(|e| {
                     tracing::error!(error = %e, "taker tx query failed");
                     ApiError::Internal("taker trades query failed".into())
