@@ -5,9 +5,9 @@ use crate::fairings::{GlobalRateLimit, TracingSpan};
 use crate::types::common::{TokenRef, ValidatedAddress, ValidatedFixedBytes};
 use crate::types::order::OrderTradeEntry;
 use crate::types::trades::{
-    TradeByAddress, TradeByTxEntry, TradeRequest, TradeResult, TradesBatchEntry,
-    TradesBatchRequest, TradesBatchResponse, TradesByAddressResponse, TradesByTxResponse,
-    TradesPagination, TradesPaginationParams, TradesTotals,
+    TakerTradesResponse, TradeByAddress, TradeByTxEntry, TradeRequest, TradeResult,
+    TradesBatchEntry, TradesBatchRequest, TradesBatchResponse, TradesByAddressResponse,
+    TradesByTxResponse, TradesPagination, TradesPaginationParams, TradesTotals,
 };
 use alloy::primitives::{Address, FixedBytes, B256};
 use async_trait::async_trait;
@@ -39,6 +39,9 @@ type TradesByAddressCache =
     AppCache<(Address, u32, u32, Option<u64>, Option<u64>), TradesByAddressResponse>;
 type TradesByTxCache = AppCache<B256, TradesByTxResponse>;
 type TradesByOrderHashCache = AppCache<B256, Vec<OrderTradeEntry>>;
+type TakerTradesTxHashCache = AppCache<Address, Vec<(B256, u64)>>;
+
+const TAKER_TX_HASH_CACHE_TTL: Duration = Duration::from_secs(15);
 
 pub(crate) fn trades_by_address_cache() -> TradesByAddressCache {
     AppCache::new(TRADES_CACHE_CAPACITY, TRADES_BY_ADDRESS_CACHE_TTL)
@@ -50,6 +53,10 @@ pub(crate) fn trades_by_tx_cache() -> TradesByTxCache {
 
 pub(crate) fn trades_by_order_hash_cache() -> TradesByOrderHashCache {
     AppCache::new(TRADES_CACHE_CAPACITY, TRADES_BY_ORDER_HASH_CACHE_TTL)
+}
+
+pub(crate) fn taker_trades_tx_hash_cache() -> TakerTradesTxHashCache {
+    AppCache::new(TRADES_CACHE_CAPACITY, TAKER_TX_HASH_CACHE_TTL)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -587,6 +594,79 @@ async fn get_cached_trades_by_address(
         .map_err(ApiError::from)
 }
 
+async fn process_get_taker_trades(
+    ds: &dyn TradesDataSource,
+    direct_trades: Option<&crate::direct_trades::DirectTradesFetcher>,
+    trades_by_tx_cache: &TradesByTxCache,
+    taker_tx_cache: &TakerTradesTxHashCache,
+    sender: Address,
+    params: TradesPaginationParams,
+) -> Result<TakerTradesResponse, ApiError> {
+    // Step 1: Get tx hashes (cached)
+    let tx_hashes = match direct_trades {
+        Some(fetcher) => {
+            taker_tx_cache
+                .get_or_try_insert(sender, || async {
+                    fetcher.fetch_taker_tx_hashes(&sender).await
+                })
+                .await
+                .map_err(ApiError::from)?
+        }
+        None => {
+            tracing::warn!("direct trades fetcher unavailable; returning empty taker trades");
+            return Ok(TakerTradesResponse {
+                market_orders: vec![],
+                pagination: TradesPagination {
+                    page: 1,
+                    page_size: params.page_size.unwrap_or(20),
+                    total_trades: 0,
+                    total_pages: 0,
+                    has_more: false,
+                },
+            });
+        }
+    };
+
+    // Step 2: Paginate
+    let page = params.page.unwrap_or(1);
+    let page_size = params.page_size.unwrap_or(20);
+    let total = tx_hashes.len() as u64;
+    let total_pages = if page_size == 0 {
+        0
+    } else {
+        total.div_ceil(u64::from(page_size))
+    };
+    let offset = (u64::from(page.saturating_sub(1)) * u64::from(page_size)) as usize;
+    let page_hashes: Vec<B256> = if offset >= tx_hashes.len() {
+        vec![]
+    } else {
+        let end = std::cmp::min(offset + page_size as usize, tx_hashes.len());
+        tx_hashes[offset..end].iter().map(|(h, _)| *h).collect()
+    };
+
+    // Step 3: Resolve each tx via existing cached trade-by-tx lookup
+    let mut market_orders = Vec::with_capacity(page_hashes.len());
+    for tx_hash in page_hashes {
+        match get_cached_trades_by_tx(trades_by_tx_cache, ds, tx_hash).await {
+            Ok(tx_trades) => market_orders.push(tx_trades),
+            Err(e) => {
+                tracing::warn!(tx_hash = %tx_hash, error = %e, "failed to resolve taker tx; skipping");
+            }
+        }
+    }
+
+    Ok(TakerTradesResponse {
+        market_orders,
+        pagination: TradesPagination {
+            page,
+            page_size,
+            total_trades: total,
+            total_pages,
+            has_more: u64::from(page) < total_pages,
+        },
+    })
+}
+
 #[utoipa::path(
     get,
     path = "/v1/trades/tx/{tx_hash}",
@@ -661,6 +741,56 @@ pub async fn get_trades_by_address(
         };
         let response =
             get_cached_trades_by_address(trades_by_address_cache, &ds, address.0, params).await?;
+        Ok(Json(response))
+    }
+    .instrument(span.0)
+    .await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/trades/taker/{address}",
+    tag = "Trades",
+    security(("basicAuth" = [])),
+    params(
+        ("address" = String, Path, description = "Taker address"),
+        TradesPaginationParams,
+    ),
+    responses(
+        (status = 200, description = "Paginated list of market orders (taker transactions)", body = TakerTradesResponse),
+        (status = 400, description = "Bad request", body = ApiErrorResponse),
+        (status = 401, description = "Unauthorized", body = ApiErrorResponse),
+        (status = 429, description = "Rate limited", body = ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = ApiErrorResponse),
+    )
+)]
+#[get("/taker/<address>?<params..>")]
+pub async fn get_taker_trades(
+    _global: GlobalRateLimit,
+    _key: AuthenticatedKey,
+    shared_raindex: &State<crate::raindex::SharedRaindexProvider>,
+    trades_by_tx_cache: &State<TradesByTxCache>,
+    taker_tx_cache: &State<TakerTradesTxHashCache>,
+    direct_trades: &State<Option<crate::direct_trades::DirectTradesFetcher>>,
+    span: TracingSpan,
+    address: ValidatedAddress,
+    params: TradesPaginationParams,
+) -> Result<Json<TakerTradesResponse>, ApiError> {
+    async move {
+        tracing::info!(address = ?address, params = ?params, "taker trades request received");
+        let raindex = shared_raindex.read().await;
+        let ds = RaindexTradesDataSource {
+            client: raindex.client(),
+        };
+        let response = process_get_taker_trades(
+            &ds,
+            direct_trades.inner().as_ref(),
+            trades_by_tx_cache,
+            taker_tx_cache,
+            address.0,
+            params,
+        )
+        .await?;
         Ok(Json(response))
     }
     .instrument(span.0)
@@ -831,7 +961,7 @@ pub async fn post_trades_batch(
 }
 
 pub fn routes() -> Vec<Route> {
-    rocket::routes![get_trades_by_tx, get_trades_by_address, post_trades_batch]
+    rocket::routes![get_trades_by_tx, get_taker_trades, get_trades_by_address, post_trades_batch]
 }
 
 #[cfg(test)]
@@ -1122,5 +1252,50 @@ mod tests {
             .dispatch()
             .await;
         assert_eq!(response.status(), Status::UnprocessableEntity);
+    }
+
+    #[rocket::async_test]
+    async fn test_process_get_taker_trades_without_direct_fetcher_returns_empty() {
+        let ds = MockTradesDataSource {
+            orders_result: Ok((vec![], 0)),
+            trades_result: Ok(vec![]),
+            tx_index_state: Ok(TxIndexState::Indexed),
+        };
+        let tx_cache = trades_by_tx_cache();
+        let taker_cache = taker_trades_tx_hash_cache();
+        let sender: Address = "0x0000000000000000000000000000000000000001"
+            .parse()
+            .unwrap();
+
+        let result = process_get_taker_trades(
+            &ds,
+            None, // no direct fetcher
+            &tx_cache,
+            &taker_cache,
+            sender,
+            TradesPaginationParams {
+                page: Some(1),
+                page_size: Some(20),
+                start_time: None,
+                end_time: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(result.market_orders.is_empty());
+        assert_eq!(result.pagination.total_trades, 0);
+        assert_eq!(result.pagination.page, 1);
+        assert!(!result.pagination.has_more);
+    }
+
+    #[rocket::async_test]
+    async fn test_get_taker_trades_401_without_auth() {
+        let client = TestClientBuilder::new().build().await;
+        let response = client
+            .get("/v1/trades/taker/0x0000000000000000000000000000000000000001")
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::Unauthorized);
     }
 }

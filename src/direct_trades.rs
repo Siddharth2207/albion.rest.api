@@ -45,6 +45,8 @@ impl DirectTradesFetcher {
              ON take_orders (chain_id, orderbook_address, order_owner, order_nonce)",
             "CREATE INDEX IF NOT EXISTS idx_vbc_block_log \
              ON vault_balance_changes (chain_id, orderbook_address, owner, token, vault_id, block_number, log_index)",
+            "CREATE INDEX IF NOT EXISTS idx_take_orders_sender \
+             ON take_orders (chain_id, orderbook_address, sender)",
         ];
         for sql in &indexes {
             if let Err(e) = conn.execute_batch(sql) {
@@ -157,6 +159,80 @@ impl DirectTradesFetcher {
         .map_err(|e| {
             tracing::error!(error = %e, "batch trades blocking task failed");
             ApiError::Internal("trade query failed".into())
+        })?
+    }
+
+    /// Fetch unique transaction hashes where `sender` was the taker.
+    /// Returns (tx_hash, timestamp) sorted by timestamp descending.
+    pub(crate) async fn fetch_taker_tx_hashes(
+        &self,
+        sender: &Address,
+    ) -> Result<Vec<(B256, u64)>, ApiError> {
+        let conn = Arc::clone(&self.conn);
+        let chain_id = self.chain_id;
+        let ob_addr = self.orderbook_address.clone();
+        let sender_hex = format!("{:#x}", sender);
+
+        spawn_blocking(move || {
+            let start = Instant::now();
+            let conn = conn.lock().map_err(|e| {
+                tracing::error!(error = %e, "failed to lock direct trades connection");
+                ApiError::Internal("taker trades query failed".into())
+            })?;
+
+            let mut stmt = conn
+                .prepare(
+                    "SELECT DISTINCT transaction_hash, MAX(block_timestamp) as ts \
+                     FROM take_orders \
+                     WHERE sender = ?1 AND chain_id = ?2 AND orderbook_address = ?3 \
+                     GROUP BY transaction_hash \
+                     ORDER BY ts DESC",
+                )
+                .map_err(|e| {
+                    tracing::error!(error = %e, "failed to prepare taker tx query");
+                    ApiError::Internal("taker trades query failed".into())
+                })?;
+
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![sender_hex, chain_id, ob_addr],
+                    |row| {
+                        let tx_hash: String = row.get(0)?;
+                        let timestamp: i64 = row.get(1)?;
+                        Ok((tx_hash, timestamp))
+                    },
+                )
+                .map_err(|e| {
+                    tracing::error!(error = %e, "taker tx query failed");
+                    ApiError::Internal("taker trades query failed".into())
+                })?;
+
+            let mut results = Vec::new();
+            for row_result in rows {
+                let (hash_str, ts) = row_result.map_err(|e| {
+                    tracing::error!(error = %e, "failed to read taker tx row");
+                    ApiError::Internal("taker trades query failed".into())
+                })?;
+                let hash = B256::from_str(&hash_str).map_err(|e| {
+                    tracing::error!(error = %e, hash = %hash_str, "invalid tx hash in taker query");
+                    ApiError::Internal("taker trades query failed".into())
+                })?;
+                results.push((hash, ts as u64));
+            }
+
+            tracing::info!(
+                sender = %sender_hex,
+                tx_count = results.len(),
+                duration_ms = start.elapsed().as_millis() as u64,
+                "fetched taker tx hashes"
+            );
+
+            Ok(results)
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "taker tx hashes blocking task failed");
+            ApiError::Internal("taker trades query failed".into())
         })?
     }
 }

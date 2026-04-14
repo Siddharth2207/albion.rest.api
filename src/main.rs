@@ -67,6 +67,7 @@ enum StartupError {
         routes::trades::get_trades_by_tx,
         routes::trades::get_trades_by_address,
         routes::trades::post_trades_batch,
+        routes::trades::get_taker_trades,
         routes::registry::get_registry,
     ),
     components(),
@@ -132,6 +133,7 @@ pub(crate) fn rocket(
     let trades_by_address_cache = routes::trades::trades_by_address_cache();
     let trades_by_tx_cache = routes::trades::trades_by_tx_cache();
     let trades_by_order_hash_cache = routes::trades::trades_by_order_hash_cache();
+    let taker_trades_tx_hash_cache = routes::trades::taker_trades_tx_hash_cache();
 
     let mut registry_caches = cache::CacheGroup::new();
     registry_caches.register(&order_cache);
@@ -141,6 +143,7 @@ pub(crate) fn rocket(
     registry_caches.register(&trades_by_address_cache);
     registry_caches.register(&trades_by_tx_cache);
     registry_caches.register(&trades_by_order_hash_cache);
+    registry_caches.register(&taker_trades_tx_hash_cache);
 
     Ok(rocket::custom(figment)
         .manage(pool)
@@ -153,6 +156,7 @@ pub(crate) fn rocket(
         .manage(trades_by_address_cache)
         .manage(trades_by_tx_cache)
         .manage(trades_by_order_hash_cache)
+        .manage(taker_trades_tx_hash_cache)
         .manage(direct_trades)
         .manage(registry_caches)
         .mount("/", routes::health::routes())

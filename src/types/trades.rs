@@ -145,3 +145,10 @@ pub struct TradesBatchEntry {
 pub struct TradesBatchResponse {
     pub orders: Vec<TradesBatchEntry>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TakerTradesResponse {
+    pub market_orders: Vec<TradesByTxResponse>,
+    pub pagination: TradesPagination,
+}
