@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(result.orders[0].io_ratio, "1.5");
         assert_eq!(
             result.orders[0].order_type,
-            crate::types::order::OrderType::Solver
+            crate::types::order::OrderType::Strategy
         );
         assert_eq!(result.pagination.total_orders, 1);
         assert_eq!(result.pagination.page, 1);

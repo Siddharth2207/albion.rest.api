@@ -5,7 +5,7 @@ use crate::fairings::{GlobalRateLimit, TracingSpan};
 use crate::types::common::{TokenRef, ValidatedFixedBytes};
 use crate::types::order::{OrderDetail, OrderDetailsInfo, OrderTradeEntry, OrderType};
 use alloy::primitives::B256;
-use rain_orderbook_common::parsed_meta::ParsedMeta;
+use rain_orderbook_bindings::IOrderBookV6::OrderV4;
 use rain_orderbook_common::raindex_client::orders::RaindexOrder;
 use rain_orderbook_common::raindex_client::trades::RaindexTrade;
 use rocket::serde::json::Json;
@@ -74,14 +74,55 @@ async fn process_get_order(ds: &dyn OrderDataSource, hash: B256) -> Result<Order
 }
 
 pub(crate) fn determine_order_type(order: &RaindexOrder) -> OrderType {
-    for meta in order.parsed_meta() {
-        if let ParsedMeta::DotrainGuiStateV1(gui_state) = meta {
-            if gui_state.selected_deployment.to_lowercase().contains("dca") {
-                return OrderType::Dca;
-            }
+    // 1. Check rainlang source: if handle-io is empty (:;), it's a limit order
+    if let Some(rainlang) = order.rainlang() {
+        return classify_from_rainlang(&rainlang);
+    }
+
+    // 2. Fall back to bytecode length heuristic
+    classify_from_bytecode(order)
+}
+
+/// Classify order type from rainlang source.
+/// Limit orders have an empty handle-io section (`:;`).
+fn classify_from_rainlang(rainlang: &str) -> OrderType {
+    // Find the handle-io section (source index 1)
+    if let Some(pos) = rainlang.find("handle-io") {
+        let after = &rainlang[pos..];
+        // Skip past the comment closing `*/`
+        let content = if let Some(end) = after.find("*/") {
+            after[end + 2..].trim()
+        } else {
+            // No comment delimiter — take everything after "handle-io"
+            after
+                .trim_start_matches(|c: char| c != ':' && c != '\n')
+                .trim()
+        };
+        // An empty handle-io is `:;` (possibly with trailing whitespace)
+        if content == ":;" || content.is_empty() {
+            return OrderType::Limit;
         }
     }
-    OrderType::Solver
+    OrderType::Strategy
+}
+
+/// Classify order type from the compiled bytecode length.
+/// Limit orders have very short bytecode (~170 bytes) compared to
+/// strategies with stateful handle-io logic (~1600+ bytes).
+fn classify_from_bytecode(order: &RaindexOrder) -> OrderType {
+    use alloy::sol_types::SolValue;
+
+    let order_bytes = order.order_bytes();
+    match OrderV4::abi_decode(order_bytes.as_ref()) {
+        Ok(decoded) => {
+            if decoded.evaluable.bytecode.len() < 500 {
+                OrderType::Limit
+            } else {
+                OrderType::Strategy
+            }
+        }
+        Err(_) => OrderType::Strategy,
+    }
 }
 
 fn build_order_detail(
@@ -172,7 +213,7 @@ mod tests {
         assert_eq!(detail.input_vault_balance, "1.000000");
         assert_eq!(detail.output_vault_balance, "0.500000000000000000");
         assert_eq!(detail.io_ratio, "1.5");
-        assert_eq!(detail.order_details.type_, OrderType::Solver);
+        assert_eq!(detail.order_details.type_, OrderType::Strategy);
         assert_eq!(detail.order_details.io_ratio, "1.5");
         assert_eq!(detail.created_at, 1700000000);
         assert_eq!(detail.trades.len(), 1);
@@ -275,9 +316,34 @@ mod tests {
     }
 
     #[rocket::async_test]
-    async fn test_determine_order_type_solver_default() {
+    async fn test_determine_order_type_strategy_default() {
+        // Mock order has no rainlang metadata and invalid order bytes → Strategy
         let order = mock_order();
-        assert_eq!(determine_order_type(&order), OrderType::Solver);
+        assert_eq!(determine_order_type(&order), OrderType::Strategy);
+    }
+
+    #[test]
+    fn test_classify_from_rainlang_limit() {
+        let rainlang = r#"/* 0. calculate-io */
+using-words-from 0x22839F16281E67E5Fd395fAFd1571e820CbD46cB
+max-output: max-positive-value(),
+io: 0.5;
+
+/* 1. handle-io */
+:;"#;
+        assert_eq!(classify_from_rainlang(rainlang), OrderType::Limit);
+    }
+
+    #[test]
+    fn test_classify_from_rainlang_strategy() {
+        let rainlang = r#"/* 0. calculate-io */
+using-words-from 0x22839F16281E67E5Fd395fAFd1571e820CbD46cB
+max-output: max-positive-value(),
+io: 0.5;
+
+/* 1. handle-io */
+:set(order-hash() amount-key get(order-hash() amount-key));"#;
+        assert_eq!(classify_from_rainlang(rainlang), OrderType::Strategy);
     }
 
     #[rocket::async_test]
@@ -309,7 +375,7 @@ mod tests {
                     owner: Address::ZERO,
                     order_bytes: Bytes::from(vec![0x01]),
                     order_details: OrderDetailsInfo {
-                        type_: OrderType::Solver,
+                        type_: OrderType::Limit,
                         io_ratio: "1.0".into(),
                     },
                     input_token: TokenRef {

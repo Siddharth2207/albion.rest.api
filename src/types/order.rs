@@ -110,8 +110,8 @@ pub struct CancelOrderResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum OrderType {
-    Dca,
-    Solver,
+    Limit,
+    Strategy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -200,11 +200,11 @@ mod tests {
     #[test]
     fn test_order_details_info_type_rename() {
         let info = OrderDetailsInfo {
-            type_: OrderType::Dca,
+            type_: OrderType::Limit,
             io_ratio: "0.0005".into(),
         };
         let json = serde_json::to_string(&info).unwrap();
-        assert!(json.contains("\"type\":\"dca\""));
+        assert!(json.contains("\"type\":\"limit\""));
         assert!(!json.contains("\"type_\""));
     }
 }

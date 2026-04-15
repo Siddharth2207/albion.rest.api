@@ -262,7 +262,7 @@ mod tests {
                     owner: Address::ZERO,
                     order_bytes: alloy::primitives::Bytes::from(vec![0x01]),
                     order_details: OrderDetailsInfo {
-                        type_: OrderType::Solver,
+                        type_: OrderType::Strategy,
                         io_ratio: "1.0".into(),
                     },
                     input_token: TokenRef {
