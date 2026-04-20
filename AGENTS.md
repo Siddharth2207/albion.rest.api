@@ -1,5 +1,9 @@
 # Agents
 
+## Infrastructure
+- Production API domain: `api.albionlabs.org`
+- Hosted on DigitalOcean (deployed via deploy-rs + NixOS)
+
 ## Build & Run
 - All commands must be run inside nix: `nix develop -c <command>`
 - Run checks: `nix develop -c cargo check`
